@@ -7,48 +7,63 @@
   <title>Masum Galaxy // Command Center</title>
 </head>
 <body>
+  <div class="scanline"></div>
   <main class="shell">
     <header class="topbar">
       <div>
         <p class="eyebrow">MASUM GALAXY</p>
         <h1>// COMMAND CENTER</h1>
+        <p class="subtitle">Developer cockpit • workspace telemetry • fast control</p>
       </div>
       <div class="status"><span class="orb"></span> SYSTEM ONLINE</div>
     </header>
 
+    <section class="telemetry">
+      <div><span>WORKSPACE</span><strong>{{workspaceName}}</strong></div>
+      <div><span>BRANCH</span><strong>{{gitBranch}}</strong></div>
+      <div><span>CHANGES</span><strong>{{gitChanges}}</strong></div>
+      <div><span>SYNC</span><strong>{{gitSync}}</strong></div>
+    </section>
+
     <section class="grid">
       <article class="card hero-card">
-        <p class="label">ACTIVE WORKSPACE</p>
+        <div class="corner"></div>
+        <p class="label">MISSION CONTROL</p>
         <h2>{{workspaceName}}</h2>
-        <p class="muted">Developer cockpit initialized.</p>
+        <p class="muted">Workspace connected. Galaxy Core is reading local developer telemetry.</p>
+        <div class="health">
+          <span class="health-dot"></span>
+          <span>CORE STATUS</span>
+          <strong>READY</strong>
+        </div>
       </article>
 
       <article class="card">
         <p class="label">QUICK ACTIONS</p>
         <div class="actions">
-          <button data-command="terminal">Open Terminal</button>
-          <button data-command="explorer">Explorer</button>
-          <button data-command="sourceControl">Source Control</button>
-          <button data-command="theme">Theme Selector</button>
+          <button data-command="terminal"><span>⌁</span> Open Terminal</button>
+          <button data-command="explorer"><span>◫</span> Explorer</button>
+          <button data-command="sourceControl"><span>⑂</span> Source Control</button>
+          <button data-command="theme"><span>✦</span> Theme Matrix</button>
+          <button class="wide" data-command="refresh"><span>↻</span> Refresh Telemetry</button>
         </div>
       </article>
 
       <article class="card">
-        <p class="label">MISSION CONTROL</p>
-        <div class="metric"><span>Git Branch</span><strong>Coming next</strong></div>
-        <div class="metric"><span>Project Health</span><strong>Coming next</strong></div>
-        <div class="metric"><span>Recent Files</span><strong>Coming next</strong></div>
+        <p class="label">GIT TELEMETRY</p>
+        <div class="metric"><span>Active Branch</span><strong>{{gitBranch}}</strong></div>
+        <div class="metric"><span>Working Changes</span><strong>{{gitChanges}}</strong></div>
+        <div class="metric"><span>Remote State</span><strong>{{gitSync}}</strong></div>
       </article>
 
       <article class="card">
-        <p class="label">ROADMAP</p>
-        <ul>
-          <li>Project launcher</li>
-          <li>Git insights</li>
-          <li>Workspace health</li>
-          <li>Theme matrix</li>
-          <li>Developer modes</li>
-        </ul>
+        <p class="label">NEXT SYSTEMS</p>
+        <div class="roadmap-grid">
+          <span>Project Launcher</span>
+          <span>Recent Files</span>
+          <span>Project Health</span>
+          <span>Dev Modes</span>
+        </div>
       </article>
     </section>
   </main>
