@@ -93,7 +93,17 @@ function getWorkspaceRoot(extensionUri) {
 }
 
 async function getGitState(extensionUri) {
-  const fallback = { branch: 'No Git repo', changes: 0, sync: 'Offline' };
+  const fallback = {
+    branch: 'No Git repo',
+    changes: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    sync: 'Offline',
+    lastCommitHash: '',
+    lastCommitSubject: '',
+    lastCommitWhen: ''
+  };
   const cwd = getWorkspaceRoot(extensionUri);
   if (!cwd) return fallback;
 
@@ -106,7 +116,26 @@ async function getGitState(extensionUri) {
     'Detached';
 
   const status = runGit(cwd, ['status', '--porcelain']);
-  const changes = status ? status.split(/\r?\n/).filter(Boolean).length : 0;
+  const statusLines = status ? status.split(/\r?\n/).filter(Boolean) : [];
+  const changes = statusLines.length;
+  let staged = 0;
+  let unstaged = 0;
+  let untracked = 0;
+
+  for (const line of statusLines) {
+    if (line.startsWith('??')) {
+      untracked++;
+      continue;
+    }
+    const indexState = line[0] || ' ';
+    const workTreeState = line[1] || ' ';
+    if (indexState !== ' ') staged++;
+    if (workTreeState !== ' ') unstaged++;
+  }
+
+  const lastCommitRaw = runGit(cwd, ['log', '-1', '--pretty=format:%h|%s|%cr']);
+  const [lastCommitHash = '', lastCommitSubject = '', lastCommitWhen = ''] =
+    lastCommitRaw ? lastCommitRaw.split('|') : [];
 
   let sync = 'Local';
   const upstream = runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
@@ -118,7 +147,17 @@ async function getGitState(extensionUri) {
     sync = ahead || behind ? `↑${ahead} ↓${behind}` : 'Synced';
   }
 
-  return { branch, changes, sync };
+  return {
+    branch,
+    changes,
+    staged,
+    unstaged,
+    untracked,
+    sync,
+    lastCommitHash,
+    lastCommitSubject,
+    lastCommitWhen
+  };
 }
 
 async function readJsonIfExists(filePath) {
@@ -385,6 +424,99 @@ function renderProjectList(items, currentPath, favorites = false) {
     .join('');
 }
 
+
+function getCommandState(context) {
+  return {
+    history: context?.globalState.get('galaxy.commandHistory', []) || [],
+    pinned: context?.globalState.get('galaxy.pinnedCommands', []) || []
+  };
+}
+
+async function recordCommand(context, command) {
+  const clean = String(command || '').trim();
+  if (!context || !clean) return;
+
+  const history = context.globalState.get('galaxy.commandHistory', []);
+  const next = [
+    { command: clean, time: Date.now() },
+    ...history.filter((item) => item?.command !== clean)
+  ].slice(0, 12);
+
+  await context.globalState.update('galaxy.commandHistory', next);
+}
+
+async function togglePinnedCommand(context, command) {
+  const clean = String(command || '').trim();
+  if (!context || !clean) return;
+
+  const pinned = context.globalState.get('galaxy.pinnedCommands', []);
+  const exists = pinned.includes(clean);
+  const next = exists
+    ? pinned.filter((item) => item !== clean)
+    : [clean, ...pinned].slice(0, 12);
+
+  await context.globalState.update('galaxy.pinnedCommands', next);
+}
+
+async function promptPinnedCommand(context) {
+  const command = await vscode.window.showInputBox({
+    title: 'Pin Command',
+    prompt: 'Enter a terminal command to pin in Galaxy Command Center',
+    placeHolder: 'npm run dev'
+  });
+
+  if (!command?.trim()) return false;
+  await togglePinnedCommand(context, command.trim());
+  return true;
+}
+
+async function clearCommandHistory(context) {
+  if (!context) return;
+  await context.globalState.update('galaxy.commandHistory', []);
+}
+
+function renderCommandHistory(history, pinned) {
+  if (!history.length) {
+    return '<p class="muted">Run a smart action or terminal command to build history.</p>';
+  }
+
+  return history
+    .slice(0, 8)
+    .map((item) => {
+      const isPinned = pinned.includes(item.command);
+      return `
+        <div class="command-row">
+          <button class="command-main" data-run-command="${escapeHtml(item.command)}">
+            <span>›</span>
+            <code>${escapeHtml(item.command)}</code>
+          </button>
+          <button class="command-pin" data-pin-command="${escapeHtml(item.command)}" title="${isPinned ? 'Unpin command' : 'Pin command'}">
+            ${isPinned ? '★' : '☆'}
+          </button>
+        </div>`;
+    })
+    .join('');
+}
+
+function renderPinnedCommands(pinned) {
+  if (!pinned.length) {
+    return '<p class="muted">No pinned commands yet.</p>';
+  }
+
+  return pinned
+    .map(
+      (command) => `
+        <div class="command-row">
+          <button class="command-main" data-run-command="${escapeHtml(command)}">
+            <span>▶</span>
+            <code>${escapeHtml(command)}</code>
+          </button>
+          <button class="command-pin" data-pin-command="${escapeHtml(command)}" title="Unpin command">★</button>
+        </div>`
+    )
+    .join('');
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer] = await Promise.all([
     getGitState(extensionUri),
@@ -411,6 +543,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     environment,
     devServer,
     recentFiles,
+    commands: context ? getCommandState(context) : { history: [], pinned: [] },
     launcher: context ? getProjectLauncherState(context) : { currentPath: '', favorites: [], recent: [] },
     ...git
   };
@@ -458,6 +591,9 @@ function getDashboardHtml(state) {
   const dependencyStatus = escapeHtml(state.health.dependencies);
   const serverStatus = state.devServer.running ? 'RUNNING' : 'OFFLINE';
   const serverUrl = escapeHtml(state.devServer.primaryUrl || '');
+  const lastCommit = state.lastCommitHash
+    ? `${escapeHtml(state.lastCommitHash)} · ${escapeHtml(state.lastCommitSubject)} · ${escapeHtml(state.lastCommitWhen)}`
+    : 'No commit data';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -549,7 +685,20 @@ function getDashboardHtml(state) {
   .server-line{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.02)}
   .server-state{color:var(--cyan);font-weight:700;letter-spacing:.08em}
   .server-actions{display:flex;gap:8px;flex-wrap:wrap}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}}
+  .git-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .git-box{padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
+  .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .git-box strong{font-size:15px}
+  .git-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
+  .commit-line{margin-top:11px;padding:10px 12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;color:var(--muted);font-size:11px}
+  .command-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .command-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
+  .command-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}
+  .command-row{display:flex;gap:8px;margin-top:8px}
+  .command-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+  .command-main code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .command-pin{width:44px;text-align:center;color:#ffcc66}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -635,11 +784,44 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card">
-      <div class="label">GIT TELEMETRY</div>
-      <div class="metric"><span>Active Branch</span><strong>${branch}</strong></div>
-      <div class="metric"><span>Working Changes</span><strong>${state.changes}</strong></div>
-      <div class="metric"><span>Remote State</span><strong>${sync}</strong></div>
+    <article class="card wide">
+      <div class="label">GIT CONTROL CENTER</div>
+      <div class="git-grid">
+        <div class="git-box"><span>BRANCH</span><strong>${branch}</strong></div>
+        <div class="git-box"><span>STAGED</span><strong>${state.staged}</strong></div>
+        <div class="git-box"><span>UNSTAGED</span><strong>${state.unstaged}</strong></div>
+        <div class="git-box"><span>UNTRACKED</span><strong>${state.untracked}</strong></div>
+      </div>
+      <div class="git-actions">
+        <button data-git-action="pull"><span>↓</span>Pull</button>
+        <button data-git-action="push"><span>↑</span>Push</button>
+        <button data-git-action="sync"><span>⇅</span>Sync</button>
+        <button data-git-action="stageAll"><span>＋</span>Stage All</button>
+      </div>
+      <div class="commit-line">Last commit: ${lastCommit}</div>
+    </article>
+
+    <article class="card wide">
+      <div class="launcher-head">
+        <div>
+          <div class="label">COMMAND HISTORY + PINNED COMMANDS</div>
+          <p class="muted">Rerun common terminal commands without retyping them.</p>
+        </div>
+        <div class="launcher-actions">
+          <button data-command="pinCommandPrompt"><span>＋</span>Pin Command</button>
+          <button data-command="clearHistory"><span>⌫</span>Clear History</button>
+        </div>
+      </div>
+      <div class="command-columns">
+        <div class="command-group">
+          <div class="command-head"><span class="project-group-title">PINNED</span></div>
+          ${renderPinnedCommands(state.commands.pinned)}
+        </div>
+        <div class="command-group">
+          <div class="command-head"><span class="project-group-title">RECENT COMMANDS</span></div>
+          ${renderCommandHistory(state.commands.history, state.commands.pinned)}
+        </div>
+      </div>
     </article>
 
     <article class="card wide">
@@ -716,6 +898,24 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'openBrowser', value: button.dataset.browserUrl });
     });
   });
+
+  document.querySelectorAll('[data-git-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'gitAction', value: button.dataset.gitAction });
+    });
+  });
+
+  document.querySelectorAll('[data-run-command]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'runTerminal', value: button.dataset.runCommand });
+    });
+  });
+
+  document.querySelectorAll('[data-pin-command]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'togglePinnedCommand', value: button.dataset.pinCommand });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -732,6 +932,7 @@ async function runAction(command, value, context) {
     case 'theme':
       return vscode.commands.executeCommand('workbench.action.selectTheme');
     case 'runTerminal': {
+      await recordCommand(context, value);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
       terminal.show();
       terminal.sendText(value, true);
@@ -749,6 +950,27 @@ async function runAction(command, value, context) {
         return vscode.env.openExternal(vscode.Uri.parse(value));
       }
       return;
+    case 'gitAction': {
+      const actionMap = {
+        pull: 'git pull',
+        push: 'git push',
+        sync: 'git pull && git push',
+        stageAll: 'git add -A'
+      };
+      const gitCommand = actionMap[value];
+      if (!gitCommand) return;
+      await recordCommand(context, gitCommand);
+      const terminal = vscode.window.createTerminal({ name: 'Galaxy Git' });
+      terminal.show();
+      terminal.sendText(gitCommand, true);
+      return;
+    }
+    case 'pinCommandPrompt':
+      return promptPinnedCommand(context);
+    case 'togglePinnedCommand':
+      return togglePinnedCommand(context, value);
+    case 'clearHistory':
+      return clearCommandHistory(context);
     case 'chooseProject':
       return chooseProjectFolder();
     case 'openProject':
@@ -864,7 +1086,10 @@ async function openDashboard(context) {
       await runAction(message.command, message.value, context);
       if (
         message.command === 'toggleCurrentFavorite' ||
-        message.command === 'toggleFavoritePath'
+        message.command === 'toggleFavoritePath' ||
+        message.command === 'pinCommandPrompt' ||
+        message.command === 'togglePinnedCommand' ||
+        message.command === 'clearHistory'
       ) {
         await render();
       }
