@@ -52,7 +52,7 @@ async function getGitState(extensionUri) {
   return { branch, changes, sync };
 }
 
-async function getWorkspaceState(extensionUri) {
+async function getWorkspaceState(extensionUri, version = 'dev') {
   const git = await getGitState(extensionUri);
 
   let workspaceName = 'No workspace open';
@@ -64,6 +64,7 @@ async function getWorkspaceState(extensionUri) {
 
   return {
     workspaceName,
+    version,
     ...git
   };
 }
@@ -72,6 +73,7 @@ function getDashboardHtml(state) {
   const workspace = escapeHtml(state.workspaceName);
   const branch = escapeHtml(state.branch);
   const sync = escapeHtml(state.sync);
+  const version = escapeHtml(state.version || 'dev');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -194,7 +196,7 @@ function getDashboardHtml(state) {
         <p class="brand">MASUM GALAXY</p>
         <h1>// COMMAND CENTER</h1>
       </div>
-      <div class="online"><span class="orb"></span>SYSTEM ONLINE</div>
+      <div class="online"><span class="orb"></span>SYSTEM ONLINE · v${version}</div>
     </header>
 
     <section class="telemetry">
@@ -274,7 +276,7 @@ class GalaxySidebarProvider {
     webviewView.webview.options = { enableScripts: true };
 
     const render = async () => {
-      const state = await getWorkspaceState(this.extensionUri);
+      const state = await getWorkspaceState(this.extensionUri, vscode.extensions.getExtension('gitwithmasum.masum-galaxy-command-center')?.packageJSON?.version || 'dev');
       webviewView.webview.html = `<!DOCTYPE html>
 <html>
 <head>
@@ -337,7 +339,7 @@ async function openDashboard(context) {
     panel.reveal(vscode.ViewColumn.One);
 
     const render = async () => {
-      const state = await getWorkspaceState(context.extensionUri);
+      const state = await getWorkspaceState(context.extensionUri, context.extension.packageJSON.version);
       panel.webview.html = getDashboardHtml(state);
     };
 
@@ -385,7 +387,7 @@ async function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('galaxyCommandCenter.diagnose', async () => {
-      const state = await getWorkspaceState(context.extensionUri);
+      const state = await getWorkspaceState(context.extensionUri, context.extension.packageJSON.version);
       const message =
         `Galaxy Command Center active | mode=${context.extensionMode} | workspace=${state.workspaceName} | branch=${state.branch} | changes=${state.changes}`;
       console.log('[Galaxy Command Center] Diagnose:', message);
