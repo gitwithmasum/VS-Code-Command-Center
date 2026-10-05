@@ -337,7 +337,7 @@ async function openDashboard(context) {
     panel.reveal(vscode.ViewColumn.One);
 
     const render = async () => {
-      const state = await getWorkspaceState(this.extensionUri);
+      const state = await getWorkspaceState(context.extensionUri);
       panel.webview.html = getDashboardHtml(state);
     };
 
