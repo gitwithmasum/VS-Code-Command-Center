@@ -63,6 +63,16 @@ The dashboard can now remember and launch projects:
 - One-click Theme Matrix switching
 - Active mode and current theme indicators
 
+## Galaxy Workspace OS — v2.0
+
+- AI HUD for selected code, diagnostics, and Git commit prompts
+- Optional VS Code Chat launcher
+- Galaxy Extension Hub with installed-extension detection
+- Marketplace access for the gitwithmasum ecosystem
+- Customizable dashboard widgets with persistent visibility choices
+
+The AI HUD only prepares context and copies prompts locally. It does not send project code or diagnostics to an external AI service by itself.
+
 ## Planned modules
 
 - Project Launcher
