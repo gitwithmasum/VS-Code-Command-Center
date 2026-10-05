@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const https = require('https');
 const { execFileSync } = require('child_process');
 
 let lastEditorContext = {
@@ -18,6 +19,11 @@ const sessionStartedAt = Date.now();
 const sessionTouchedFiles = new Set();
 let sessionCommandCount = 0;
 let sessionSaveCount = 0;
+
+let githubStateCache = {
+  at: 0,
+  value: null
+};
 
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
@@ -141,6 +147,358 @@ function getWorkspaceRoot(extensionUri) {
   return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || extensionUri?.fsPath || '';
 }
 
+
+function remoteToWebUrl(remoteUrl) {
+  const raw = String(remoteUrl || '').trim();
+  if (!raw) return '';
+
+  const scpMatch = raw.match(/^git@([^:]+):(.+)$/);
+  if (scpMatch) {
+    return `https://${scpMatch[1]}/${scpMatch[2].replace(/\.git$/i, '')}`;
+  }
+
+  const sshMatch = raw.match(/^ssh:\/\/git@([^/]+)\/(.+)$/);
+  if (sshMatch) {
+    return `https://${sshMatch[1]}/${sshMatch[2].replace(/\.git$/i, '')}`;
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    return raw.replace(/\.git$/i, '');
+  }
+
+  return '';
+}
+
+function detectRemoteProvider(remoteUrl) {
+  const value = String(remoteUrl || '').toLowerCase();
+  if (!value) return 'Local only';
+  if (value.includes('github.com')) return 'GitHub';
+  if (value.includes('gitlab.com')) return 'GitLab';
+  if (value.includes('bitbucket.org')) return 'Bitbucket';
+  if (value.includes('dev.azure.com') || value.includes('visualstudio.com')) return 'Azure DevOps';
+  return 'Git Remote';
+}
+
+function githubApi(pathname, token) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      {
+        hostname: 'api.github.com',
+        path: pathname,
+        method: 'GET',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'Masum-Galaxy-Command-Center',
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            try {
+              resolve(JSON.parse(body || 'null'));
+            } catch (error) {
+              reject(error);
+            }
+            return;
+          }
+
+          reject(new Error(`GitHub API ${response.statusCode}: ${body.slice(0, 300)}`));
+        });
+      }
+    );
+
+    request.setTimeout(7000, () => {
+      request.destroy(new Error('GitHub API request timed out.'));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+async function getGitHubState(force = false) {
+  if (!force && githubStateCache.value && Date.now() - githubStateCache.at < 60000) {
+    return githubStateCache.value;
+  }
+
+  try {
+    const session = await vscode.authentication.getSession(
+      'github',
+      ['repo'],
+      { createIfNone: false }
+    );
+
+    if (!session) {
+      const value = {
+        connected: false,
+        account: '',
+        repos: [],
+        error: ''
+      };
+      githubStateCache = { at: Date.now(), value };
+      return value;
+    }
+
+    let repos = [];
+    let error = '';
+
+    try {
+      const records = await githubApi(
+        '/user/repos?per_page=8&sort=updated&affiliation=owner%2Ccollaborator%2Corganization_member',
+        session.accessToken
+      );
+
+      repos = Array.isArray(records)
+        ? records.map((item) => ({
+            id: String(item.id || ''),
+            name: item.name || '',
+            fullName: item.full_name || item.name || '',
+            private: Boolean(item.private),
+            cloneUrl: item.clone_url || '',
+            htmlUrl: item.html_url || ''
+          }))
+        : [];
+    } catch (apiError) {
+      error = apiError.message || 'Unable to load GitHub repositories.';
+    }
+
+    const value = {
+      connected: true,
+      account: session.account?.label || session.account?.id || 'GitHub account',
+      repos,
+      error
+    };
+    githubStateCache = { at: Date.now(), value };
+    return value;
+  } catch (error) {
+    return {
+      connected: false,
+      account: '',
+      repos: [],
+      error: error.message || 'GitHub authentication is unavailable.'
+    };
+  }
+}
+
+async function connectGitHub() {
+  try {
+    const session = await vscode.authentication.getSession(
+      'github',
+      ['repo'],
+      { createIfNone: true }
+    );
+    githubStateCache = { at: 0, value: null };
+    if (session) {
+      vscode.window.showInformationMessage(
+        `Galaxy connected to GitHub as ${session.account?.label || 'your account'}.`
+      );
+      return true;
+    }
+  } catch (error) {
+    vscode.window.showErrorMessage(`GitHub sign-in failed: ${error.message || error}`);
+  }
+  return false;
+}
+
+function runGitLocal(cwd, args, successMessage) {
+  try {
+    const output = execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim();
+
+    if (successMessage) {
+      vscode.window.showInformationMessage(successMessage);
+    }
+    return output;
+  } catch (error) {
+    const detail =
+      String(error?.stderr || error?.message || 'Git command failed').trim();
+    vscode.window.showErrorMessage(detail.slice(0, 500));
+    return null;
+  }
+}
+
+async function initializeRepository(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showWarningMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  if (runGit(root, ['rev-parse', '--is-inside-work-tree']) === 'true') {
+    vscode.window.showInformationMessage('This workspace is already a Git repository.');
+    return false;
+  }
+
+  return runGitLocal(root, ['init'], 'Git repository initialized.') !== null;
+}
+
+async function manageOrigin(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const current = runGit(root, ['remote', 'get-url', 'origin']);
+  const next = await vscode.window.showInputBox({
+    title: current ? 'Change Remote Origin' : 'Add Remote Origin',
+    prompt: 'Enter a GitHub, GitLab, Bitbucket, Azure DevOps, or other Git remote URL',
+    value: current || '',
+    placeHolder: 'https://github.com/user/repository.git'
+  });
+
+  if (!next?.trim()) return false;
+
+  const result = current
+    ? runGitLocal(root, ['remote', 'set-url', 'origin', next.trim()], 'Remote origin updated.')
+    : runGitLocal(root, ['remote', 'add', 'origin', next.trim()], 'Remote origin added.');
+
+  return result !== null;
+}
+
+async function createBranch(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const branch = await vscode.window.showInputBox({
+    title: 'Create Git Branch',
+    prompt: 'Enter a new branch name',
+    placeHolder: 'feature/repository-hub',
+    validateInput: (value) => {
+      if (!value.trim()) return 'Branch name is required.';
+      if (/\s/.test(value)) return 'Branch names cannot contain spaces.';
+      return undefined;
+    }
+  });
+
+  if (!branch?.trim()) return false;
+  return runGitLocal(
+    root,
+    ['switch', '-c', branch.trim()],
+    `Created and switched to ${branch.trim()}.`
+  ) !== null;
+}
+
+async function switchBranch(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const branches = runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  if (!branches.length) {
+    vscode.window.showInformationMessage('No local branches are available yet.');
+    return false;
+  }
+
+  const selected = await vscode.window.showQuickPick(branches, {
+    title: 'Switch Git Branch',
+    placeHolder: 'Select a local branch'
+  });
+
+  if (!selected) return false;
+  return runGitLocal(root, ['switch', selected], `Switched to ${selected}.`) !== null;
+}
+
+async function commitStagedChanges(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const staged = runGit(root, ['diff', '--cached', '--name-only']);
+  if (!staged) {
+    vscode.window.showWarningMessage('There are no staged changes to commit.');
+    return false;
+  }
+
+  const message = await vscode.window.showInputBox({
+    title: 'Commit Staged Changes',
+    prompt: 'Enter a Git commit message',
+    placeHolder: 'feat: improve repository control hub'
+  });
+
+  if (!message?.trim()) return false;
+  return runGitLocal(root, ['commit', '-m', message.trim()], 'Git commit created.') !== null;
+}
+
+async function openRemoteRepository(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const origin = runGit(root, ['remote', 'get-url', 'origin']);
+  const url = remoteToWebUrl(origin);
+  if (!url) {
+    vscode.window.showWarningMessage('No browser-compatible remote origin was found.');
+    return false;
+  }
+
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+  return true;
+}
+
+async function cloneRepository(url = '') {
+  let cloneUrl = String(url || '').trim();
+
+  if (!cloneUrl) {
+    cloneUrl = await vscode.window.showInputBox({
+      title: 'Clone Repository',
+      prompt: 'Paste a Git repository URL',
+      placeHolder: 'https://github.com/user/repository.git'
+    }) || '';
+  }
+
+  if (!cloneUrl.trim()) return false;
+
+  const commands = await vscode.commands.getCommands(true);
+  if (commands.includes('git.clone')) {
+    await vscode.commands.executeCommand('git.clone', cloneUrl.trim());
+    return true;
+  }
+
+  vscode.window.showWarningMessage('VS Code Git clone command is unavailable.');
+  return false;
+}
+
+async function openGitHubRepository(url) {
+  if (!url) return false;
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+  return true;
+}
+
+function renderGitHubRepos(github) {
+  if (!github.connected) {
+    return '<p class="muted">Connect your GitHub account to see recently updated repositories here.</p>';
+  }
+
+  if (github.error && !github.repos.length) {
+    return `<p class="muted">${escapeHtml(github.error)}</p>`;
+  }
+
+  if (!github.repos.length) {
+    return '<p class="muted">No repositories were returned for this account.</p>';
+  }
+
+  return github.repos
+    .map(
+      (repo) => `
+        <div class="remote-repo-row">
+          <div class="remote-repo-copy">
+            <strong>${escapeHtml(repo.fullName)}</strong>
+            <small>${repo.private ? 'Private' : 'Public'}</small>
+          </div>
+          <button data-github-open="${escapeHtml(repo.htmlUrl)}">Open</button>
+          <button data-github-clone="${escapeHtml(repo.cloneUrl)}">Clone</button>
+        </div>`
+    )
+    .join('');
+}
+
 async function getGitState(extensionUri) {
   const fallback = {
     branch: 'No Git repo',
@@ -151,7 +509,12 @@ async function getGitState(extensionUri) {
     sync: 'Offline',
     lastCommitHash: '',
     lastCommitSubject: '',
-    lastCommitWhen: ''
+    lastCommitWhen: '',
+    isGitRepo: false,
+    originUrl: '',
+    remoteWebUrl: '',
+    provider: 'Local only',
+    branches: []
   };
   const cwd = getWorkspaceRoot(extensionUri);
   if (!cwd) return fallback;
@@ -196,6 +559,13 @@ async function getGitState(extensionUri) {
     sync = ahead || behind ? `↑${ahead} ↓${behind}` : 'Synced';
   }
 
+  const originUrl = runGit(cwd, ['remote', 'get-url', 'origin']);
+  const remoteWebUrl = remoteToWebUrl(originUrl);
+  const provider = detectRemoteProvider(originUrl);
+  const branches = runGit(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
   return {
     branch,
     changes,
@@ -205,7 +575,12 @@ async function getGitState(extensionUri) {
     sync,
     lastCommitHash,
     lastCommitSubject,
-    lastCommitWhen
+    lastCommitWhen,
+    isGitRepo: true,
+    originUrl,
+    remoteWebUrl,
+    provider,
+    branches
   };
 }
 
@@ -855,7 +1230,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'environment', label: 'Environment Status' },
   { id: 'server', label: 'Dev Server Monitor' },
   { id: 'smartActions', label: 'Smart Project Actions' },
-  { id: 'git', label: 'Git Control Center' },
+  { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
   { id: 'modes', label: 'Developer Modes' },
   { id: 'themes', label: 'Theme Matrix' },
@@ -1064,12 +1439,13 @@ function widgetAttr(state, id) {
 }
 
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
-  const [git, project, health, recentFiles, devServer] = await Promise.all([
+  const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
     detectProject(extensionUri),
     getProjectHealth(extensionUri),
     getRecentFiles(),
-    getDevServerStatus()
+    getDevServerStatus(),
+    getGitHubState()
   ]);
   const environment = getEnvironmentStatus();
 
@@ -1088,6 +1464,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     health,
     environment,
     devServer,
+    github,
     recentFiles,
     ai: getAiHudState(),
     projectNote: context ? getProjectNote(context, extensionUri) : '',
@@ -1147,6 +1524,9 @@ function getDashboardHtml(state) {
   const serverUrl = escapeHtml(state.devServer.primaryUrl || '');
   const activeMode = escapeHtml(state.mode.active || 'Default');
   const currentTheme = escapeHtml(state.themes.currentTheme || 'Default');
+  const provider = escapeHtml(state.provider || 'Local only');
+  const originUrl = escapeHtml(state.originUrl || 'No origin configured');
+  const githubAccount = escapeHtml(state.github?.account || '');
   const lastCommit = state.lastCommitHash
     ? `${escapeHtml(state.lastCommitHash)} · ${escapeHtml(state.lastCommitSubject)} · ${escapeHtml(state.lastCommitWhen)}`
     : 'No commit data';
@@ -1246,6 +1626,18 @@ function getDashboardHtml(state) {
   .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
   .git-box strong{font-size:15px}
   .git-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
+  .repo-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .repo-meta-box{padding:13px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018);min-width:0}
+  .repo-meta-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .repo-meta-box strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .repo-tool-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:10px}
+  .github-panel{margin-top:14px;padding:14px;border:1px solid rgba(181,108,255,.18);border-radius:14px;background:rgba(181,108,255,.035)}
+  .github-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
+  .remote-repo-list{display:grid;gap:8px}
+  .remote-repo-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:10px;border:1px solid rgba(0,247,255,.1);border-radius:11px;background:rgba(0,247,255,.015)}
+  .remote-repo-copy{display:flex;flex-direction:column;min-width:0}
+  .remote-repo-copy strong,.remote-repo-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .remote-repo-copy small{color:var(--muted);margin-top:3px}
   .commit-line{margin-top:11px;padding:10px 12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;color:var(--muted);font-size:11px}
   .command-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
   .command-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
@@ -1290,7 +1682,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -1380,20 +1772,63 @@ function getDashboardHtml(state) {
     </article>
 
     <article class="card wide"${widgetAttr(state, 'git')}>
-      <div class="label">GIT CONTROL CENTER</div>
+      <div class="hub-head">
+        <div>
+          <div class="label">REPOSITORY CONTROL HUB</div>
+          <div class="muted">Local Git + GitHub / GitLab / Bitbucket / Azure DevOps remote control</div>
+        </div>
+        <button data-command="cloneRepository"><span>↓</span>Clone Repository</button>
+      </div>
+
+      <div class="repo-meta">
+        <div class="repo-meta-box"><span>PROVIDER</span><strong>${provider}</strong></div>
+        <div class="repo-meta-box"><span>BRANCH</span><strong>${branch}</strong></div>
+        <div class="repo-meta-box"><span>ORIGIN</span><strong title="${originUrl}">${originUrl}</strong></div>
+      </div>
+
       <div class="git-grid">
-        <div class="git-box"><span>BRANCH</span><strong>${branch}</strong></div>
         <div class="git-box"><span>STAGED</span><strong>${state.staged}</strong></div>
         <div class="git-box"><span>UNSTAGED</span><strong>${state.unstaged}</strong></div>
         <div class="git-box"><span>UNTRACKED</span><strong>${state.untracked}</strong></div>
+        <div class="git-box"><span>SYNC</span><strong>${sync}</strong></div>
       </div>
+
       <div class="git-actions">
+        <button data-git-action="fetch"><span>↻</span>Fetch</button>
         <button data-git-action="pull"><span>↓</span>Pull</button>
         <button data-git-action="push"><span>↑</span>Push</button>
         <button data-git-action="sync"><span>⇅</span>Sync</button>
         <button data-git-action="stageAll"><span>＋</span>Stage All</button>
+        <button data-git-action="unstageAll"><span>−</span>Unstage All</button>
+        <button data-command="commitChanges"><span>✓</span>Commit</button>
+        <button data-command="openRemoteRepository"><span>↗</span>Open Remote</button>
       </div>
+
+      <div class="repo-tool-grid">
+        <button data-command="createBranch"><span>⑂</span>Create Branch</button>
+        <button data-command="switchBranch"><span>⇄</span>Switch Branch</button>
+        <button data-command="manageOrigin"><span>⌘</span>Manage Origin</button>
+        <button data-command="initializeRepository"><span>＋</span>Initialize Git</button>
+      </div>
+
       <div class="commit-line">Last commit: ${lastCommit}</div>
+
+      <div class="github-panel">
+        <div class="github-head">
+          <div>
+            <strong>GITHUB ACCOUNT</strong>
+            <div class="muted">${state.github.connected ? `Connected as ${githubAccount}` : 'Not connected through VS Code yet'}</div>
+          </div>
+          <div class="launcher-actions">
+            ${state.github.connected
+              ? '<button data-command="refreshGitHub"><span>↻</span>Refresh Repos</button>'
+              : '<button data-command="connectGitHub"><span>◎</span>Connect GitHub</button>'}
+          </div>
+        </div>
+        <div class="remote-repo-list">
+          ${renderGitHubRepos(state.github)}
+        </div>
+      </div>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'commands')}>
@@ -1661,6 +2096,18 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'deleteSnapshot', value: button.dataset.deleteSnapshot });
     });
   });
+
+  document.querySelectorAll('[data-github-open]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openGitHubRepository', value: button.dataset.githubOpen });
+    });
+  });
+
+  document.querySelectorAll('[data-github-clone]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'cloneRepository', value: button.dataset.githubClone });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -1705,6 +2152,27 @@ async function runAction(command, value, context) {
       return restoreWorkspaceSnapshot(context, context?.extensionUri, value);
     case 'deleteSnapshot':
       return deleteWorkspaceSnapshot(context, context?.extensionUri, value);
+    case 'connectGitHub':
+      return connectGitHub();
+    case 'refreshGitHub':
+      githubStateCache = { at: 0, value: null };
+      return true;
+    case 'openGitHubRepository':
+      return openGitHubRepository(value);
+    case 'cloneRepository':
+      return cloneRepository(value);
+    case 'initializeRepository':
+      return initializeRepository(context?.extensionUri);
+    case 'manageOrigin':
+      return manageOrigin(context?.extensionUri);
+    case 'createBranch':
+      return createBranch(context?.extensionUri);
+    case 'switchBranch':
+      return switchBranch(context?.extensionUri);
+    case 'commitChanges':
+      return commitStagedChanges(context?.extensionUri);
+    case 'openRemoteRepository':
+      return openRemoteRepository(context?.extensionUri);
     case 'runTerminal': {
       await recordCommand(context, value);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
@@ -1726,10 +2194,12 @@ async function runAction(command, value, context) {
       return;
     case 'gitAction': {
       const actionMap = {
+        fetch: 'git fetch --all --prune',
         pull: 'git pull',
         push: 'git push',
         sync: 'git pull && git push',
-        stageAll: 'git add -A'
+        stageAll: 'git add -A',
+        unstageAll: 'git reset'
       };
       const gitCommand = actionMap[value];
       if (!gitCommand) return;
@@ -1874,7 +2344,14 @@ async function openDashboard(context) {
         message.command === 'editProjectNote' ||
         message.command === 'createSnapshot' ||
         message.command === 'restoreSnapshot' ||
-        message.command === 'deleteSnapshot'
+        message.command === 'deleteSnapshot' ||
+        message.command === 'connectGitHub' ||
+        message.command === 'refreshGitHub' ||
+        message.command === 'initializeRepository' ||
+        message.command === 'manageOrigin' ||
+        message.command === 'createBranch' ||
+        message.command === 'switchBranch' ||
+        message.command === 'commitChanges'
       ) {
         await render();
       }
