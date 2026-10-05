@@ -199,7 +199,104 @@ async function getRecentFiles() {
   }));
 }
 
-async function getWorkspaceState(extensionUri, version = 'dev') {
+
+function normalizeProjectRecord(fsPath) {
+  if (!fsPath) return null;
+  return {
+    name: path.basename(fsPath),
+    path: fsPath
+  };
+}
+
+async function rememberCurrentProject(context) {
+  const currentPath = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+  if (!currentPath) return;
+
+  const current = normalizeProjectRecord(currentPath);
+  const recent = context.globalState.get('galaxy.recentProjects', []);
+  const next = [
+    current,
+    ...recent.filter((item) => item?.path && item.path.toLowerCase() !== currentPath.toLowerCase())
+  ].slice(0, 8);
+
+  await context.globalState.update('galaxy.recentProjects', next);
+}
+
+function getProjectLauncherState(context) {
+  const favorites = context.globalState.get('galaxy.favoriteProjects', []);
+  const recent = context.globalState.get('galaxy.recentProjects', []);
+  const currentPath = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
+
+  return {
+    currentPath,
+    favorites,
+    recent
+  };
+}
+
+async function toggleFavoriteProject(context, fsPath) {
+  if (!fsPath) return;
+
+  const favorites = context.globalState.get('galaxy.favoriteProjects', []);
+  const exists = favorites.some(
+    (item) => item?.path && item.path.toLowerCase() === fsPath.toLowerCase()
+  );
+
+  const next = exists
+    ? favorites.filter((item) => item?.path && item.path.toLowerCase() !== fsPath.toLowerCase())
+    : [normalizeProjectRecord(fsPath), ...favorites].filter(Boolean).slice(0, 12);
+
+  await context.globalState.update('galaxy.favoriteProjects', next);
+}
+
+async function openProjectFolder(fsPath) {
+  if (!fsPath) return;
+  const uri = vscode.Uri.file(fsPath);
+  await vscode.commands.executeCommand('vscode.openFolder', uri, false);
+}
+
+async function chooseProjectFolder() {
+  const selected = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Open Project'
+  });
+
+  if (!selected?.[0]) return;
+  await vscode.commands.executeCommand('vscode.openFolder', selected[0], false);
+}
+
+function renderProjectList(items, currentPath, favorites = false) {
+  if (!items?.length) {
+    return '<p class="muted">No projects saved yet.</p>';
+  }
+
+  return items
+    .map((item) => {
+      const isCurrent =
+        currentPath &&
+        item.path &&
+        item.path.toLowerCase() === currentPath.toLowerCase();
+
+      return `
+        <div class="project-row">
+          <button class="project-main" data-project-path="${escapeHtml(item.path)}">
+            <span class="project-dot">${isCurrent ? '●' : '○'}</span>
+            <span class="project-copy">
+              <strong>${escapeHtml(item.name)}</strong>
+              <small>${escapeHtml(item.path)}</small>
+            </span>
+          </button>
+          ${favorites ? `
+            <button class="project-star" data-favorite-path="${escapeHtml(item.path)}" title="Remove favorite">★</button>
+          ` : ''}
+        </div>`;
+    })
+    .join('');
+}
+
+async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles] = await Promise.all([
     getGitState(extensionUri),
     detectProject(extensionUri),
@@ -221,6 +318,7 @@ async function getWorkspaceState(extensionUri, version = 'dev') {
     project,
     health,
     recentFiles,
+    launcher: context ? getProjectLauncherState(context) : { currentPath: '', favorites: [], recent: [] },
     ...git
   };
 }
@@ -335,6 +433,19 @@ function getDashboardHtml(state) {
   .file-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .file-copy small{margin-top:3px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .project-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid rgba(0,247,255,.18);border-radius:999px;color:var(--cyan);font-size:11px;margin:10px 0 18px}
+  .launcher-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+  .launcher-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .launcher-actions button{padding:9px 11px}
+  .project-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .project-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
+  .project-group-title{font-size:10px;letter-spacing:.12em;color:var(--muted);margin-bottom:9px}
+  .project-row{display:flex;gap:8px;align-items:stretch;margin-top:8px}
+  .project-main{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+  .project-copy{display:flex;flex-direction:column;min-width:0}
+  .project-copy strong,.project-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .project-copy small{color:var(--muted);margin-top:3px}
+  .project-dot{color:var(--cyan)}
+  .project-star{width:44px;text-align:center;color:#ffcc66}
   @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
@@ -401,6 +512,30 @@ function getDashboardHtml(state) {
     </article>
 
     <article class="card wide">
+      <div class="launcher-head">
+        <div>
+          <div class="label">PROJECT LAUNCHER</div>
+          <p class="muted">Jump between projects and keep important workspaces pinned.</p>
+        </div>
+        <div class="launcher-actions">
+          <button data-command="chooseProject"><span>＋</span>Open Project</button>
+          <button data-command="toggleCurrentFavorite"><span>★</span>Favorite Current</button>
+        </div>
+      </div>
+
+      <div class="project-columns">
+        <div class="project-group">
+          <div class="project-group-title">FAVORITES</div>
+          ${renderProjectList(state.launcher.favorites, state.launcher.currentPath, true)}
+        </div>
+        <div class="project-group">
+          <div class="project-group-title">RECENT PROJECTS</div>
+          ${renderProjectList(state.launcher.recent, state.launcher.currentPath, false)}
+        </div>
+      </div>
+    </article>
+
+    <article class="card wide">
       <div class="label">RECENT FILES</div>
       <div class="files">
         ${renderRecentFiles(state.recentFiles)}
@@ -432,12 +567,24 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'openFile', value: button.dataset.fileUri });
     });
   });
+
+  document.querySelectorAll('[data-project-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openProject', value: button.dataset.projectPath });
+    });
+  });
+
+  document.querySelectorAll('[data-favorite-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'toggleFavoritePath', value: button.dataset.favoritePath });
+    });
+  });
 </script>
 </body>
 </html>`;
 }
 
-async function runAction(command, value) {
+async function runAction(command, value, context) {
   switch (command) {
     case 'terminal':
       return vscode.commands.executeCommand('workbench.action.terminal.toggleTerminal');
@@ -460,14 +607,31 @@ async function runAction(command, value) {
       const document = await vscode.workspace.openTextDocument(uri);
       return vscode.window.showTextDocument(document, { preview: false });
     }
+    case 'chooseProject':
+      return chooseProjectFolder();
+    case 'openProject':
+      return openProjectFolder(value);
+    case 'toggleCurrentFavorite': {
+      const currentPath = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+      if (context && currentPath) {
+        await toggleFavoriteProject(context, currentPath);
+      }
+      return;
+    }
+    case 'toggleFavoritePath':
+      if (context) {
+        await toggleFavoriteProject(context, value);
+      }
+      return;
     default:
       return undefined;
   }
 }
 
 class GalaxySidebarProvider {
-  constructor(extensionUri) {
+  constructor(extensionUri, context) {
     this.extensionUri = extensionUri;
+    this.context = context;
   }
 
   resolveWebviewView(webviewView) {
@@ -478,7 +642,7 @@ class GalaxySidebarProvider {
       const version =
         vscode.extensions.getExtension('gitwithmasum.masum-galaxy-command-center')
           ?.packageJSON?.version || 'dev';
-      const state = await getWorkspaceState(this.extensionUri, version);
+      const state = await getWorkspaceState(this.extensionUri, version, this.context);
 
       webviewView.webview.html = `<!DOCTYPE html>
 <html>
@@ -517,7 +681,7 @@ function send(command){vscode.postMessage({command});}
         await vscode.commands.executeCommand('galaxyCommandCenter.open');
         return;
       }
-      await runAction(message.command, message.value);
+      await runAction(message.command, message.value, this.context);
     });
 
     render();
@@ -544,7 +708,8 @@ async function openDashboard(context) {
     const render = async () => {
       const state = await getWorkspaceState(
         context.extensionUri,
-        context.extension.packageJSON.version
+        context.extension.packageJSON.version,
+        context
       );
       panel.webview.html = getDashboardHtml(state);
     };
@@ -554,7 +719,7 @@ async function openDashboard(context) {
         await render();
         return;
       }
-      await runAction(message.command, message.value);
+      await runAction(message.command, message.value, this.context);
     });
 
     await render();
@@ -570,8 +735,15 @@ async function openDashboard(context) {
 
 async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
+  await rememberCurrentProject(context);
 
-  const sidebarProvider = new GalaxySidebarProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      await rememberCurrentProject(context);
+    })
+  );
+
+  const sidebarProvider = new GalaxySidebarProvider(context.extensionUri, context);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -596,7 +768,8 @@ async function activate(context) {
     vscode.commands.registerCommand('galaxyCommandCenter.diagnose', async () => {
       const state = await getWorkspaceState(
         context.extensionUri,
-        context.extension.packageJSON.version
+        context.extension.packageJSON.version,
+        context
       );
       const message =
         `Galaxy Command Center active | workspace=${state.workspaceName} | type=${state.project.type} | branch=${state.branch} | errors=${state.health.errors} | warnings=${state.health.warnings}`;
