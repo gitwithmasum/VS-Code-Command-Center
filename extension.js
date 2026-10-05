@@ -342,6 +342,19 @@ async function openDashboard(context) {
 async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
 
+  if (
+    context.extensionMode === vscode.ExtensionMode.Development &&
+    (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0)
+  ) {
+    try {
+      console.log('[Galaxy Command Center] No workspace detected. Opening extension folder...');
+      await vscode.commands.executeCommand('vscode.openFolder', context.extensionUri, false);
+      return;
+    } catch (error) {
+      console.error('[Galaxy Command Center] Failed to auto-open extension workspace:', error);
+    }
+  }
+
   const sidebarProvider = new GalaxySidebarProvider();
 
   context.subscriptions.push(
