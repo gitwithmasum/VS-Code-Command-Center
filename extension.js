@@ -2299,6 +2299,12 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'cloneRepository', value: button.dataset.githubClone });
     });
   });
+
+  document.querySelectorAll('[data-external-url]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openExternalUrl', value: button.dataset.externalUrl });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -2347,9 +2353,21 @@ async function runAction(command, value, context) {
       return connectGitHub();
     case 'refreshGitHub':
       githubStateCache = { at: 0, value: null };
+      githubCollaborationCache = { key: '', at: 0, value: null };
       return true;
     case 'openGitHubRepository':
       return openGitHubRepository(value);
+    case 'openExternalUrl':
+      if (value) return vscode.env.openExternal(vscode.Uri.parse(value));
+      return false;
+    case 'createGitHubRepository':
+      return Boolean(await createGitHubRepository());
+    case 'publishCurrentProject':
+      return publishCurrentProjectToGitHub(context?.extensionUri);
+    case 'createGitHubIssue':
+      return createGitHubIssue(context?.extensionUri);
+    case 'createGitHubPullRequest':
+      return createGitHubPullRequest(context?.extensionUri);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -2569,7 +2587,11 @@ async function openDashboard(context) {
         message.command === 'createBranch' ||
         message.command === 'switchBranch' ||
         message.command === 'commitChanges' ||
-        message.command === 'gitAction'
+        message.command === 'gitAction' ||
+        message.command === 'createGitHubRepository' ||
+        message.command === 'publishCurrentProject' ||
+        message.command === 'createGitHubIssue' ||
+        message.command === 'createGitHubPullRequest'
       ) {
         await render();
       }
