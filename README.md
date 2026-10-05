@@ -73,6 +73,14 @@ The dashboard can now remember and launch projects:
 
 The AI HUD only prepares context and copies prompts locally. It does not send project code or diagnostics to an external AI service by itself.
 
+## Productivity State — v2.1
+
+- Project-specific notes and next-task reminders
+- Live coding session duration, files touched, commands run, and saves
+- Lightweight workspace snapshots
+- Safe restore of theme, mode label, dashboard visibility, pinned commands, project note, and active file
+- Snapshot restore does not switch Git branches or modify project file contents
+
 ## Planned modules
 
 - Project Launcher
