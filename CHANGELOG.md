@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed Git telemetry in normal installed VS Code sessions.
+- Git commands now prefer the currently open workspace folder instead of the extension installation directory.
+- Branch, changes, and sync status now reflect the active project repository.
+
 ## 1.2.0
 
 - Added an on-screen version badge so installed updates can be verified immediately.
