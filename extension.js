@@ -14,6 +14,11 @@ let lastEditorContext = {
 let lastAiPrompt = '';
 let lastAiPromptKind = '';
 
+const sessionStartedAt = Date.now();
+const sessionTouchedFiles = new Set();
+let sessionCommandCount = 0;
+let sessionSaveCount = 0;
+
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
@@ -480,6 +485,8 @@ async function recordCommand(context, command) {
   const clean = String(command || '').trim();
   if (!context || !clean) return;
 
+  sessionCommandCount++;
+
   const history = context.globalState.get('galaxy.commandHistory', []);
   const next = [
     { command: clean, time: Date.now() },
@@ -671,6 +678,178 @@ function renderThemeMatrix(themeState) {
 }
 
 
+
+function workspaceStateKey(extensionUri) {
+  return getWorkspaceRoot(extensionUri) || 'no-workspace';
+}
+
+function getProjectNote(context, extensionUri) {
+  if (!context) return '';
+  const notes = context.globalState.get('galaxy.projectNotes', {});
+  return notes[workspaceStateKey(extensionUri)] || '';
+}
+
+async function editProjectNote(context, extensionUri) {
+  if (!context) return false;
+
+  const key = workspaceStateKey(extensionUri);
+  const notes = context.globalState.get('galaxy.projectNotes', {});
+  const current = notes[key] || '';
+
+  const value = await vscode.window.showInputBox({
+    title: 'Project Note',
+    prompt: 'Add a short note or next task for this workspace',
+    value: current,
+    placeHolder: 'Next: finish dashboard polish and test packaging'
+  });
+
+  if (value === undefined) return false;
+
+  if (value.trim()) {
+    notes[key] = value.trim();
+  } else {
+    delete notes[key];
+  }
+
+  await context.globalState.update('galaxy.projectNotes', notes);
+  return true;
+}
+
+function formatSessionDuration(ms) {
+  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function getSessionStats() {
+  return {
+    duration: formatSessionDuration(Date.now() - sessionStartedAt),
+    filesTouched: sessionTouchedFiles.size,
+    commandsRun: sessionCommandCount,
+    saves: sessionSaveCount
+  };
+}
+
+function snapshotStorageKey(extensionUri) {
+  return workspaceStateKey(extensionUri);
+}
+
+function getWorkspaceSnapshots(context, extensionUri) {
+  if (!context) return [];
+  const all = context.globalState.get('galaxy.workspaceSnapshots', {});
+  return all[snapshotStorageKey(extensionUri)] || [];
+}
+
+async function createWorkspaceSnapshot(context, extensionUri) {
+  if (!context) return false;
+
+  const root = getWorkspaceRoot(extensionUri);
+  const defaultName = `Snapshot ${new Date().toLocaleString()}`;
+  const name = await vscode.window.showInputBox({
+    title: 'Create Workspace Snapshot',
+    prompt: 'Name this lightweight workspace snapshot',
+    value: defaultName
+  });
+
+  if (!name?.trim()) return false;
+
+  const activeEditor = vscode.window.activeTextEditor;
+  const snapshots = getWorkspaceSnapshots(context, extensionUri);
+  const snapshot = {
+    id: String(Date.now()),
+    name: name.trim(),
+    createdAt: Date.now(),
+    theme: vscode.workspace.getConfiguration('workbench').get('colorTheme') || '',
+    activeMode: context.globalState.get('galaxy.activeDeveloperMode', 'Default'),
+    hiddenWidgets: context.globalState.get('galaxy.hiddenWidgets', []),
+    pinnedCommands: context.globalState.get('galaxy.pinnedCommands', []),
+    projectNote: getProjectNote(context, extensionUri),
+    activeFile: activeEditor?.document?.uri?.toString() || '',
+    workspace: root
+  };
+
+  const all = context.globalState.get('galaxy.workspaceSnapshots', {});
+  all[snapshotStorageKey(extensionUri)] = [snapshot, ...snapshots].slice(0, 8);
+  await context.globalState.update('galaxy.workspaceSnapshots', all);
+
+  vscode.window.showInformationMessage(`Workspace snapshot "${snapshot.name}" saved.`);
+  return true;
+}
+
+async function restoreWorkspaceSnapshot(context, extensionUri, snapshotId) {
+  if (!context || !snapshotId) return false;
+
+  const snapshots = getWorkspaceSnapshots(context, extensionUri);
+  const snapshot = snapshots.find((item) => item.id === snapshotId);
+  if (!snapshot) {
+    vscode.window.showWarningMessage('Workspace snapshot was not found.');
+    return false;
+  }
+
+  if (snapshot.theme) {
+    await vscode.workspace
+      .getConfiguration('workbench')
+      .update('colorTheme', snapshot.theme, vscode.ConfigurationTarget.Global);
+  }
+
+  await context.globalState.update('galaxy.activeDeveloperMode', snapshot.activeMode || 'Default');
+  await context.globalState.update('galaxy.hiddenWidgets', snapshot.hiddenWidgets || []);
+  await context.globalState.update('galaxy.pinnedCommands', snapshot.pinnedCommands || []);
+
+  const notes = context.globalState.get('galaxy.projectNotes', {});
+  const key = workspaceStateKey(extensionUri);
+  if (snapshot.projectNote) notes[key] = snapshot.projectNote;
+  else delete notes[key];
+  await context.globalState.update('galaxy.projectNotes', notes);
+
+  if (snapshot.activeFile) {
+    try {
+      const uri = vscode.Uri.parse(snapshot.activeFile);
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch {
+      // Snapshot can still restore UI state if the old active file no longer exists.
+    }
+  }
+
+  vscode.window.showInformationMessage(`Workspace snapshot "${snapshot.name}" restored.`);
+  return true;
+}
+
+async function deleteWorkspaceSnapshot(context, extensionUri, snapshotId) {
+  if (!context || !snapshotId) return false;
+
+  const key = snapshotStorageKey(extensionUri);
+  const all = context.globalState.get('galaxy.workspaceSnapshots', {});
+  const next = (all[key] || []).filter((item) => item.id !== snapshotId);
+  all[key] = next;
+  await context.globalState.update('galaxy.workspaceSnapshots', all);
+  return true;
+}
+
+function renderWorkspaceSnapshots(snapshots) {
+  if (!snapshots.length) {
+    return '<p class="muted">No snapshots yet. Create one before a major workspace/layout change.</p>';
+  }
+
+  return snapshots
+    .slice(0, 6)
+    .map((snapshot) => {
+      const when = new Date(snapshot.createdAt).toLocaleString();
+      return `
+        <div class="snapshot-row">
+          <div class="snapshot-copy">
+            <strong>${escapeHtml(snapshot.name)}</strong>
+            <small>${escapeHtml(when)} · ${escapeHtml(snapshot.activeMode || 'Default')}</small>
+          </div>
+          <button data-restore-snapshot="${escapeHtml(snapshot.id)}">Restore</button>
+          <button data-delete-snapshot="${escapeHtml(snapshot.id)}">×</button>
+        </div>`;
+    })
+    .join('');
+}
+
 const DASHBOARD_WIDGETS = [
   { id: 'health', label: 'Project Health' },
   { id: 'environment', label: 'Environment Status' },
@@ -681,6 +860,9 @@ const DASHBOARD_WIDGETS = [
   { id: 'modes', label: 'Developer Modes' },
   { id: 'themes', label: 'Theme Matrix' },
   { id: 'ai', label: 'AI HUD' },
+  { id: 'notes', label: 'Project Notes' },
+  { id: 'session', label: 'Coding Session Stats' },
+  { id: 'snapshots', label: 'Workspace Snapshots' },
   { id: 'extensions', label: 'Galaxy Extension Hub' },
   { id: 'projects', label: 'Project Launcher' },
   { id: 'files', label: 'Recent Files' }
@@ -908,6 +1090,9 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     devServer,
     recentFiles,
     ai: getAiHudState(),
+    projectNote: context ? getProjectNote(context, extensionUri) : '',
+    session: getSessionStats(),
+    snapshots: context ? getWorkspaceSnapshots(context, extensionUri) : [],
     galaxyExtensions: getGalaxyExtensions(),
     widgets: context ? getWidgetState(context) : { hidden: [] },
     mode: context ? getDeveloperModeState(context) : { active: 'Default' },
@@ -1095,7 +1280,17 @@ function getDashboardHtml(state) {
   .hub-copy strong,.hub-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .hub-copy small{color:var(--muted);margin-top:4px}
   .hub-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}}
+  .note-box{padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018);white-space:pre-wrap;line-height:1.55}
+  .session-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .session-box{padding:14px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
+  .session-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .session-box strong{font-size:18px}
+  .snapshot-list{display:grid;gap:9px}
+  .snapshot-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:11px;border:1px solid rgba(0,247,255,.11);border-radius:12px;background:rgba(0,247,255,.018)}
+  .snapshot-copy{display:flex;flex-direction:column;min-width:0}
+  .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .snapshot-copy small{color:var(--muted);margin-top:4px}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -1291,6 +1486,40 @@ function getDashboardHtml(state) {
       <p class="muted" style="margin-top:12px;margin-bottom:0">AI HUD prepares context locally. It does not send project data anywhere by itself.</p>
     </article>
 
+    <article class="card wide"${widgetAttr(state, 'notes')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">PROJECT NOTES</div>
+          <div class="muted">Workspace-specific note / next task</div>
+        </div>
+        <button data-command="editProjectNote"><span>✎</span>Edit Note</button>
+      </div>
+      <div class="note-box">${state.projectNote ? escapeHtml(state.projectNote) : '<span class="muted">No project note yet.</span>'}</div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'session')}>
+      <div class="label">CODING SESSION STATS</div>
+      <div class="session-grid">
+        <div class="session-box"><span>SESSION TIME</span><strong>${escapeHtml(state.session.duration)}</strong></div>
+        <div class="session-box"><span>FILES TOUCHED</span><strong>${state.session.filesTouched}</strong></div>
+        <div class="session-box"><span>COMMANDS RUN</span><strong>${state.session.commandsRun}</strong></div>
+        <div class="session-box"><span>SAVES</span><strong>${state.session.saves}</strong></div>
+      </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'snapshots')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">WORKSPACE SNAPSHOTS</div>
+          <div class="muted">Lightweight UI state, note, pinned commands, theme, and active file</div>
+        </div>
+        <button data-command="createSnapshot"><span>＋</span>Create Snapshot</button>
+      </div>
+      <div class="snapshot-list">
+        ${renderWorkspaceSnapshots(state.snapshots)}
+      </div>
+    </article>
+
     <article class="card wide"${widgetAttr(state, 'extensions')}>
       <div class="hub-head">
         <div>
@@ -1420,6 +1649,18 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'openGalaxyExtension', value: button.dataset.extensionId });
     });
   });
+
+  document.querySelectorAll('[data-restore-snapshot]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'restoreSnapshot', value: button.dataset.restoreSnapshot });
+    });
+  });
+
+  document.querySelectorAll('[data-delete-snapshot]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'deleteSnapshot', value: button.dataset.deleteSnapshot });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -1456,6 +1697,14 @@ async function runAction(command, value, context) {
       return openGalaxyExtension(value);
     case 'searchGalaxyExtensions':
       return searchGalaxyExtensions();
+    case 'editProjectNote':
+      return editProjectNote(context, context?.extensionUri);
+    case 'createSnapshot':
+      return createWorkspaceSnapshot(context, context?.extensionUri);
+    case 'restoreSnapshot':
+      return restoreWorkspaceSnapshot(context, context?.extensionUri, value);
+    case 'deleteSnapshot':
+      return deleteWorkspaceSnapshot(context, context?.extensionUri, value);
     case 'runTerminal': {
       await recordCommand(context, value);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
@@ -1621,7 +1870,11 @@ async function openDashboard(context) {
         message.command === 'focusMode' ||
         message.command === 'applyTheme' ||
         message.command === 'customizeDashboard' ||
-        message.command === 'aiPrompt'
+        message.command === 'aiPrompt' ||
+        message.command === 'editProjectNote' ||
+        message.command === 'createSnapshot' ||
+        message.command === 'restoreSnapshot' ||
+        message.command === 'deleteSnapshot'
       ) {
         await render();
       }
@@ -1651,8 +1904,32 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       captureEditorContext(editor, true);
+      if (editor?.document?.uri?.scheme === 'file') {
+        sessionTouchedFiles.add(editor.document.uri.fsPath);
+      }
     })
   );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
+        sessionTouchedFiles.add(event.document.uri.fsPath);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      if (document.uri.scheme === 'file') {
+        sessionTouchedFiles.add(document.uri.fsPath);
+        sessionSaveCount++;
+      }
+    })
+  );
+
+  if (vscode.window.activeTextEditor?.document?.uri?.scheme === 'file') {
+    sessionTouchedFiles.add(vscode.window.activeTextEditor.document.uri.fsPath);
+  }
 
   await rememberCurrentProject(context);
 
