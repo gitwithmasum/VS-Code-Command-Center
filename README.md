@@ -40,7 +40,7 @@ Open the repository in VS Code, then install dependencies:
 npm.cmd install
 ```
 
-Press `F5` to launch an **Extension Development Host**.
+Press `F5` to launch an **Extension Development Host**. The current `VS-Code-Command-Center` workspace opens automatically in the development host, so workspace and Git telemetry are available immediately.
 
 Then open the Command Palette:
 
