@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- Added an on-screen version badge so installed updates can be verified immediately.
+- Added a reliable VSIX-based local install workflow for testing in normal VS Code.
+- Recommended packaging/installing the extension instead of repeatedly relying on Extension Development Host sessions.
+
 ## 1.1.8
 
 - Fixed dashboard telemetry using an invalid `this.extensionUri` reference inside `openDashboard()`.
