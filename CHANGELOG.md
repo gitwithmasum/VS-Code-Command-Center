@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed AI HUD code selection being lost when the Command Center webview takes focus.
+- Added a cached editor/selection context so Explain Selection works after opening the dashboard.
+- Diagnose File now also falls back to the last active code editor context.
+
 ## 2.0.0
 
 - Added AI HUD that builds prompts from selected code, current-file diagnostics, and Git changes without automatically sending project data to any service.
