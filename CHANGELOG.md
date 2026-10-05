@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.0
+
+- Added Developer Modes for Frontend, Python, AI/ML, Debug, Study, and Focus workflows.
+- Added Focus Mode through VS Code Zen Mode without modifying project files.
+- Added Theme Matrix that detects installed contributed color themes and applies them directly.
+- Added active mode and current theme indicators to the dashboard.
+
 ## 1.6.0
 
 - Added Git Control Center with staged, unstaged, untracked, sync, and last-commit telemetry.
