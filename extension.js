@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
+const net = require('net');
 const { execFileSync } = require('child_process');
 
 function escapeHtml(value) {
@@ -22,6 +23,69 @@ function runGit(cwd, args) {
   } catch {
     return '';
   }
+}
+
+
+function runVersionCommand(command, args = []) {
+  try {
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim().split(/\r?\n/)[0];
+  } catch {
+    return 'Not found';
+  }
+}
+
+function getEnvironmentStatus() {
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  let python = runVersionCommand('python', ['--version']);
+  if (python === 'Not found' && process.platform === 'win32') {
+    python = runVersionCommand('py', ['--version']);
+  }
+
+  return {
+    node: process.version,
+    npm: runVersionCommand(npmCommand, ['--version']),
+    python,
+    git: runVersionCommand('git', ['--version']).replace(/^git version\s+/i, ''),
+    vscode: vscode.version
+  };
+}
+
+function isPortOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(280);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
+async function getDevServerStatus() {
+  const commonPorts = [3000, 3001, 4173, 4200, 5000, 5173, 8000, 8080];
+  const checks = await Promise.all(
+    commonPorts.map(async (port) => ({ port, open: await isPortOpen(port) }))
+  );
+  const ports = checks.filter((item) => item.open).map((item) => item.port);
+
+  return {
+    running: ports.length > 0,
+    ports,
+    primaryUrl: ports.length ? `http://localhost:${ports[0]}` : ''
+  };
 }
 
 function getWorkspaceRoot(extensionUri) {
@@ -163,11 +227,36 @@ async function getProjectHealth(extensionUri) {
     }
   }
 
+  const packageJsonPath = root ? path.join(root, 'package.json') : '';
+  const hasPackageJson = Boolean(packageJsonPath && fs.existsSync(packageJsonPath));
+  const dependencies =
+    hasPackageJson
+      ? (fs.existsSync(path.join(root, 'node_modules')) ? 'Installed' : 'Missing')
+      : 'N/A';
+
+  const packageJson = hasPackageJson ? await readJsonIfExists(packageJsonPath) : null;
+  const scripts = packageJson?.scripts ? Object.keys(packageJson.scripts).length : 0;
+
+  let score = 100;
+  score -= Math.min(errors * 15, 60);
+  score -= Math.min(warnings * 3, 24);
+  score -= Math.min(todoCount, 10);
+  if (dependencies === 'Missing') score -= 15;
+  score = Math.max(0, Math.min(100, score));
+
+  const status =
+    score >= 90 ? 'Healthy' :
+    score >= 70 ? 'Review' :
+    'Attention';
+
   return {
     errors,
     warnings,
     todos: todoCount,
-    status: errors === 0 ? (warnings === 0 ? 'Healthy' : 'Review') : 'Attention'
+    dependencies,
+    scripts,
+    score,
+    status
   };
 }
 
@@ -297,12 +386,14 @@ function renderProjectList(items, currentPath, favorites = false) {
 }
 
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
-  const [git, project, health, recentFiles] = await Promise.all([
+  const [git, project, health, recentFiles, devServer] = await Promise.all([
     getGitState(extensionUri),
     detectProject(extensionUri),
     getProjectHealth(extensionUri),
-    getRecentFiles()
+    getRecentFiles(),
+    getDevServerStatus()
   ]);
+  const environment = getEnvironmentStatus();
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -317,6 +408,8 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     repoPath: getWorkspaceRoot(extensionUri),
     project,
     health,
+    environment,
+    devServer,
     recentFiles,
     launcher: context ? getProjectLauncherState(context) : { currentPath: '', favorites: [], recent: [] },
     ...git
@@ -362,6 +455,9 @@ function getDashboardHtml(state) {
   const version = escapeHtml(state.version || 'dev');
   const projectType = escapeHtml(state.project.type);
   const healthStatus = escapeHtml(state.health.status);
+  const dependencyStatus = escapeHtml(state.health.dependencies);
+  const serverStatus = state.devServer.running ? 'RUNNING' : 'OFFLINE';
+  const serverUrl = escapeHtml(state.devServer.primaryUrl || '');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -446,7 +542,14 @@ function getDashboardHtml(state) {
   .project-copy small{color:var(--muted);margin-top:3px}
   .project-dot{color:var(--cyan)}
   .project-star{width:44px;text-align:center;color:#ffcc66}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}}
+  .env-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+  .env-box{padding:13px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.02)}
+  .env-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .env-box strong{font-size:13px;word-break:break-word}
+  .server-line{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.02)}
+  .server-state{color:var(--cyan);font-weight:700;letter-spacing:.08em}
+  .server-actions{display:flex;gap:8px;flex-wrap:wrap}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -493,7 +596,35 @@ function getDashboardHtml(state) {
         <div class="health-box"><span>ERRORS</span><strong>${state.health.errors}</strong></div>
         <div class="health-box"><span>WARNINGS</span><strong>${state.health.warnings}</strong></div>
         <div class="health-box"><span>TODO / FIXME</span><strong>${state.health.todos}</strong></div>
+        <div class="health-box"><span>DEPENDENCIES</span><strong>${dependencyStatus}</strong></div>
+        <div class="health-box"><span>NPM SCRIPTS</span><strong>${state.health.scripts}</strong></div>
+        <div class="health-box"><span>HEALTH SCORE</span><strong>${state.health.score}/100</strong></div>
         <div class="health-box status"><span>STATUS</span><strong>${healthStatus}</strong></div>
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="label">ENVIRONMENT STATUS</div>
+      <div class="env-grid">
+        <div class="env-box"><span>NODE</span><strong>${escapeHtml(state.environment.node)}</strong></div>
+        <div class="env-box"><span>NPM</span><strong>${escapeHtml(state.environment.npm)}</strong></div>
+        <div class="env-box"><span>PYTHON</span><strong>${escapeHtml(state.environment.python)}</strong></div>
+        <div class="env-box"><span>GIT</span><strong>${escapeHtml(state.environment.git)}</strong></div>
+        <div class="env-box"><span>VS CODE</span><strong>${escapeHtml(state.environment.vscode)}</strong></div>
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="label">DEV SERVER MONITOR</div>
+      <div class="server-line">
+        <div>
+          <div class="server-state">${serverStatus}</div>
+          <div class="muted">${state.devServer.running ? serverUrl : 'No common local development port detected.'}</div>
+        </div>
+        <div class="server-actions">
+          ${state.devServer.running ? `<button data-browser-url="${serverUrl}"><span>↗</span>Open Browser</button>` : ''}
+          <button data-command="refresh"><span>↻</span>Scan Ports</button>
+        </div>
       </div>
     </article>
 
@@ -579,6 +710,12 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'toggleFavoritePath', value: button.dataset.favoritePath });
     });
   });
+
+  document.querySelectorAll('[data-browser-url]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openBrowser', value: button.dataset.browserUrl });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -607,6 +744,11 @@ async function runAction(command, value, context) {
       const document = await vscode.workspace.openTextDocument(uri);
       return vscode.window.showTextDocument(document, { preview: false });
     }
+    case 'openBrowser':
+      if (value) {
+        return vscode.env.openExternal(vscode.Uri.parse(value));
+      }
+      return;
     case 'chooseProject':
       return chooseProjectFolder();
     case 'openProject':
@@ -719,7 +861,13 @@ async function openDashboard(context) {
         await render();
         return;
       }
-      await runAction(message.command, message.value, this.context);
+      await runAction(message.command, message.value, context);
+      if (
+        message.command === 'toggleCurrentFavorite' ||
+        message.command === 'toggleFavoritePath'
+      ) {
+        await render();
+      }
     });
 
     await render();
