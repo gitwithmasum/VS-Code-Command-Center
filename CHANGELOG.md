@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.5
+
+- Dashboard now opens automatically when the Extension Development Host starts.
+- Removed the unreliable attempt to force-open a workspace folder in the development host.
+- Git telemetry now prefers the extension repository path directly, even when no workspace is open.
+- F5 development flow is now: launch host -> activate extension -> open dashboard automatically.
+
 ## 1.1.4
 
 - Added direct repository detection using the extension installation folder.
