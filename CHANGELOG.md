@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8
+
+- Fixed dashboard telemetry using an invalid `this.extensionUri` reference inside `openDashboard()`.
+- Dashboard now reads the actual extension repository path through `context.extensionUri`.
+- Workspace name, branch, changes, and sync status now render from the correct repository context.
+
 ## 1.1.7
 
 - Replaced VS Code Git API telemetry with direct Git CLI telemetry for local development reliability.
