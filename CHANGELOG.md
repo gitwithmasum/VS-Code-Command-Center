@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+- Added automatic workspace recovery in Extension Development Host.
+- When the development host starts without a workspace, Galaxy Command Center now opens its own extension folder automatically.
+- This removes the persistent 'No workspace open / No Git repo' state during local development.
+
 ## 1.1.2
 
 - Simplified dashboard rendering to a self-contained webview for maximum reliability.
