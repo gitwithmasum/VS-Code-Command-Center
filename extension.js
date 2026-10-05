@@ -388,6 +388,16 @@ async function activate(context) {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('galaxyCommandCenter.diagnose', async () => {
+      const state = await getWorkspaceState(context.extensionUri);
+      const message =
+        `Galaxy Command Center active | mode=${context.extensionMode} | workspace=${state.workspaceName} | branch=${state.branch} | changes=${state.changes}`;
+      console.log('[Galaxy Command Center] Diagnose:', message);
+      vscode.window.showInformationMessage(message);
+    })
+  );
+
   const statusItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
@@ -399,9 +409,16 @@ async function activate(context) {
   context.subscriptions.push(statusItem);
 
   if (context.extensionMode === vscode.ExtensionMode.Development) {
-    setTimeout(() => {
-      vscode.commands.executeCommand('galaxyCommandCenter.open');
-    }, 700);
+    console.log('[Galaxy Command Center] Development mode detected. Auto-opening dashboard...');
+    try {
+      await openDashboard(context);
+      console.log('[Galaxy Command Center] Dashboard auto-open completed');
+    } catch (error) {
+      console.error('[Galaxy Command Center] Dashboard auto-open failed:', error);
+      vscode.window.showErrorMessage(
+        'Galaxy Command Center could not auto-open the dashboard. Check Debug Console.'
+      );
+    }
   }
 }
 
