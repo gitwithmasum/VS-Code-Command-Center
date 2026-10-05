@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- Added a proper VS Code Extension Development Host launch configuration for reliable F5 testing.
+- Added startup activation and explicit refresh-command activation.
+- Added safe activation of VS Code's built-in Git extension before reading Git telemetry.
+- Improved dashboard startup reliability during local development.
+
 ## 1.1.0
 
 - Added a dedicated Galaxy Command Center Activity Bar container.
