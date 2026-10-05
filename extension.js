@@ -1813,6 +1813,12 @@ function getDashboardHtml(state) {
   .remote-repo-copy{display:flex;flex-direction:column;min-width:0}
   .remote-repo-copy strong,.remote-repo-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .remote-repo-copy small{color:var(--muted);margin-top:3px}
+  .collab-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .collab-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .collab-group{padding:11px;border:1px solid rgba(0,247,255,.1);border-radius:12px;background:rgba(0,247,255,.014)}
+  .collab-row{display:flex;width:100%;gap:8px;align-items:center;margin-top:7px}
+  .collab-row span{min-width:62px;color:var(--cyan)}
+  .collab-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .commit-line{margin-top:11px;padding:10px 12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;color:var(--muted);font-size:11px}
   .command-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
   .command-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
@@ -1991,15 +1997,25 @@ function getDashboardHtml(state) {
       <div class="github-panel">
         <div class="github-head">
           <div>
-            <strong>GITHUB ACCOUNT</strong>
+            <strong>GITHUB COLLABORATION</strong>
             <div class="muted">${state.github.connected ? `Connected as ${githubAccount}` : 'Not connected through VS Code yet'}</div>
           </div>
           <div class="launcher-actions">
             ${state.github.connected
-              ? '<button data-command="refreshGitHub"><span>↻</span>Refresh Repos</button>'
+              ? '<button data-command="refreshGitHub"><span>↻</span>Refresh</button>'
               : '<button data-command="connectGitHub"><span>◎</span>Connect GitHub</button>'}
           </div>
         </div>
+        <div class="collab-actions">
+          <button data-command="createGitHubRepository"><span>＋</span>Create Repo</button>
+          <button data-command="publishCurrentProject"><span>⇧</span>Publish Current Project</button>
+          <button data-command="createGitHubIssue"><span>!</span>New Issue</button>
+          <button data-command="createGitHubPullRequest"><span>⑂</span>New Pull Request</button>
+        </div>
+        <div class="remote-repo-list">
+          ${renderGitHubCollaboration(state.githubCollaboration)}
+        </div>
+        <div class="project-group-title" style="margin-top:14px">RECENT GITHUB REPOSITORIES</div>
         <div class="remote-repo-list">
           ${renderGitHubRepos(state.github)}
         </div>
