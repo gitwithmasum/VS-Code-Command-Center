@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0
+
+- Added project-specific notes stored per workspace.
+- Added live coding-session stats for session duration, files touched, Command Center commands run, and saves.
+- Added lightweight workspace snapshots with theme, active developer mode, dashboard widget visibility, pinned commands, project note, and active file.
+- Added snapshot restore and delete controls without changing Git branches or project file contents.
+
 ## 2.0.2
 
 - Added direct AI HUD prompt preview inside the Command Center dashboard.
