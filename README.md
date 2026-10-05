@@ -47,6 +47,14 @@ The dashboard can now remember and launch projects:
 - Dev server monitor for common localhost ports
 - One-click Open Browser for detected local servers
 
+## Git + Command Workflow — v1.6
+
+- Git Control Center with staged, unstaged, untracked, sync, and last commit status
+- Pull, Push, Sync, and Stage All controls
+- Recent Command History
+- Pinned Commands
+- One-click rerun and custom command pinning
+
 ## Planned modules
 
 - Project Launcher
