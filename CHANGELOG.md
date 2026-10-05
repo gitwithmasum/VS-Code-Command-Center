@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- Added Project Launcher with Command Center-managed recent projects.
+- Added favorite project pinning and unpinning.
+- Added one-click project switching and an Open Project folder picker.
+- Current workspaces are remembered automatically and shown in the dashboard launcher.
+- Added futuristic launcher UI with current-project indicators.
+
 ## 1.3.1
 
 - Removed wildcard `*` activation to avoid unnecessary startup performance cost.
