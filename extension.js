@@ -517,6 +517,115 @@ function renderPinnedCommands(pinned) {
     .join('');
 }
 
+
+function getInstalledThemes() {
+  const themes = [];
+
+  for (const extension of vscode.extensions.all) {
+    const contributed = extension.packageJSON?.contributes?.themes;
+    if (!Array.isArray(contributed)) continue;
+
+    for (const theme of contributed) {
+      const label = theme.label || theme.id;
+      if (!label) continue;
+      if (!themes.some((item) => item.label === label)) {
+        themes.push({
+          label,
+          uiTheme: theme.uiTheme || 'vs-dark'
+        });
+      }
+    }
+  }
+
+  const currentTheme =
+    vscode.workspace.getConfiguration('workbench').get('colorTheme') || '';
+
+  themes.sort((a, b) => {
+    if (a.label === currentTheme) return -1;
+    if (b.label === currentTheme) return 1;
+    if (/masum|galaxy/i.test(a.label) && !/masum|galaxy/i.test(b.label)) return -1;
+    if (/masum|galaxy/i.test(b.label) && !/masum|galaxy/i.test(a.label)) return 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  return {
+    currentTheme,
+    themes: themes.slice(0, 12)
+  };
+}
+
+function getDeveloperModeState(context) {
+  return {
+    active: context?.globalState.get('galaxy.activeDeveloperMode', 'Default') || 'Default'
+  };
+}
+
+async function setDeveloperMode(context, mode) {
+  const normalized = String(mode || 'Default');
+  if (context) {
+    await context.globalState.update('galaxy.activeDeveloperMode', normalized);
+  }
+
+  switch (normalized) {
+    case 'Frontend':
+      await vscode.commands.executeCommand('workbench.view.explorer');
+      await vscode.commands.executeCommand('workbench.action.terminal.toggleTerminal');
+      break;
+    case 'Python':
+      await vscode.commands.executeCommand('workbench.view.explorer');
+      await vscode.commands.executeCommand('workbench.action.terminal.toggleTerminal');
+      break;
+    case 'AI / ML':
+      await vscode.commands.executeCommand('workbench.view.explorer');
+      await vscode.commands.executeCommand('workbench.action.terminal.toggleTerminal');
+      break;
+    case 'Debug':
+      await vscode.commands.executeCommand('workbench.view.debug');
+      break;
+    case 'Study':
+      await vscode.commands.executeCommand('workbench.action.toggleCenteredLayout');
+      break;
+    case 'Focus':
+      await vscode.commands.executeCommand('workbench.action.toggleZenMode');
+      break;
+    default:
+      await vscode.commands.executeCommand('workbench.view.explorer');
+      break;
+  }
+}
+
+async function applyTheme(themeLabel) {
+  const label = String(themeLabel || '').trim();
+  if (!label) return;
+
+  const available = getInstalledThemes().themes.some((theme) => theme.label === label);
+  if (!available) {
+    vscode.window.showWarningMessage(`Theme "${label}" is not currently installed.`);
+    return;
+  }
+
+  await vscode.workspace
+    .getConfiguration('workbench')
+    .update('colorTheme', label, vscode.ConfigurationTarget.Global);
+}
+
+function renderThemeMatrix(themeState) {
+  if (!themeState.themes.length) {
+    return '<p class="muted">No contributed color themes detected.</p>';
+  }
+
+  return themeState.themes
+    .map((theme) => {
+      const active = theme.label === themeState.currentTheme;
+      return `
+        <button class="theme-tile ${active ? 'active' : ''}" data-theme-label="${escapeHtml(theme.label)}">
+          <span>${active ? '●' : '○'}</span>
+          <strong>${escapeHtml(theme.label)}</strong>
+        </button>`;
+    })
+    .join('');
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer] = await Promise.all([
     getGitState(extensionUri),
@@ -543,6 +652,8 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     environment,
     devServer,
     recentFiles,
+    mode: context ? getDeveloperModeState(context) : { active: 'Default' },
+    themes: getInstalledThemes(),
     commands: context ? getCommandState(context) : { history: [], pinned: [] },
     launcher: context ? getProjectLauncherState(context) : { currentPath: '', favorites: [], recent: [] },
     ...git
@@ -591,6 +702,8 @@ function getDashboardHtml(state) {
   const dependencyStatus = escapeHtml(state.health.dependencies);
   const serverStatus = state.devServer.running ? 'RUNNING' : 'OFFLINE';
   const serverUrl = escapeHtml(state.devServer.primaryUrl || '');
+  const activeMode = escapeHtml(state.mode.active || 'Default');
+  const currentTheme = escapeHtml(state.themes.currentTheme || 'Default');
   const lastCommit = state.lastCommitHash
     ? `${escapeHtml(state.lastCommitHash)} · ${escapeHtml(state.lastCommitSubject)} · ${escapeHtml(state.lastCommitWhen)}`
     : 'No commit data';
@@ -698,7 +811,17 @@ function getDashboardHtml(state) {
   .command-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
   .command-main code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
   .command-pin{width:44px;text-align:center;color:#ffcc66}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}}
+  .mode-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .mode-btn.active{border-color:var(--cyan);box-shadow:0 0 24px rgba(0,247,255,.12);background:rgba(0,247,255,.08)}
+  .mode-btn strong{display:block;margin-bottom:4px}
+  .mode-btn small{color:var(--muted)}
+  .focus-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:12px;padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
+  .theme-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .theme-tile{display:flex;align-items:center;gap:8px;min-width:0}
+  .theme-tile strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .theme-tile.active{border-color:var(--cyan);background:rgba(0,247,255,.08);box-shadow:0 0 22px rgba(0,247,255,.12)}
+  .theme-meta{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -825,6 +948,50 @@ function getDashboardHtml(state) {
     </article>
 
     <article class="card wide">
+      <div class="label">DEVELOPER MODES</div>
+      <div class="mode-grid">
+        <button class="mode-btn ${state.mode.active === 'Frontend' ? 'active' : ''}" data-dev-mode="Frontend">
+          <strong>Frontend</strong><small>Explorer + Terminal</small>
+        </button>
+        <button class="mode-btn ${state.mode.active === 'Python' ? 'active' : ''}" data-dev-mode="Python">
+          <strong>Python</strong><small>Explorer + Terminal</small>
+        </button>
+        <button class="mode-btn ${state.mode.active === 'AI / ML' ? 'active' : ''}" data-dev-mode="AI / ML">
+          <strong>AI / ML</strong><small>Workspace + Terminal</small>
+        </button>
+        <button class="mode-btn ${state.mode.active === 'Debug' ? 'active' : ''}" data-dev-mode="Debug">
+          <strong>Debug</strong><small>Run & Debug panel</small>
+        </button>
+        <button class="mode-btn ${state.mode.active === 'Study' ? 'active' : ''}" data-dev-mode="Study">
+          <strong>Study</strong><small>Centered editor layout</small>
+        </button>
+        <button class="mode-btn ${state.mode.active === 'Focus' ? 'active' : ''}" data-dev-mode="Focus">
+          <strong>Focus</strong><small>Zen Mode</small>
+        </button>
+      </div>
+      <div class="focus-bar">
+        <div>
+          <strong>Active Mode: ${activeMode}</strong>
+          <div class="muted">Modes change layout/actions only; they do not overwrite your project files.</div>
+        </div>
+        <button data-command="focusMode"><span>◉</span>Toggle Focus Mode</button>
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="theme-meta">
+        <div>
+          <div class="label">THEME MATRIX</div>
+          <div class="muted">Current: ${currentTheme}</div>
+        </div>
+        <button data-command="theme"><span>✦</span>Open Full Theme Picker</button>
+      </div>
+      <div class="theme-grid">
+        ${renderThemeMatrix(state.themes)}
+      </div>
+    </article>
+
+    <article class="card wide">
       <div class="launcher-head">
         <div>
           <div class="label">PROJECT LAUNCHER</div>
@@ -916,6 +1083,18 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'togglePinnedCommand', value: button.dataset.pinCommand });
     });
   });
+
+  document.querySelectorAll('[data-dev-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'developerMode', value: button.dataset.devMode });
+    });
+  });
+
+  document.querySelectorAll('[data-theme-label]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'applyTheme', value: button.dataset.themeLabel });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -931,6 +1110,15 @@ async function runAction(command, value, context) {
       return vscode.commands.executeCommand('workbench.view.scm');
     case 'theme':
       return vscode.commands.executeCommand('workbench.action.selectTheme');
+    case 'developerMode':
+      return setDeveloperMode(context, value);
+    case 'focusMode':
+      if (context) {
+        await context.globalState.update('galaxy.activeDeveloperMode', 'Focus');
+      }
+      return vscode.commands.executeCommand('workbench.action.toggleZenMode');
+    case 'applyTheme':
+      return applyTheme(value);
     case 'runTerminal': {
       await recordCommand(context, value);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
@@ -1089,7 +1277,10 @@ async function openDashboard(context) {
         message.command === 'toggleFavoritePath' ||
         message.command === 'pinCommandPrompt' ||
         message.command === 'togglePinnedCommand' ||
-        message.command === 'clearHistory'
+        message.command === 'clearHistory' ||
+        message.command === 'developerMode' ||
+        message.command === 'focusMode' ||
+        message.command === 'applyTheme'
       ) {
         await render();
       }
