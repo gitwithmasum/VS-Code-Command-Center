@@ -1605,6 +1605,57 @@ async function searchGalaxyExtensions() {
   await vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
+function getProviderBridgeState() {
+  const gitlabVersion = runVersionCommand('glab', ['--version']);
+  const bitbucketVersion = runVersionCommand('twg', ['--version']);
+  const state = {
+    gitlabInstalled: gitlabVersion !== 'Not found',
+    gitlabVersion,
+    gitlabRepos: [],
+    gitlabReady: false,
+    bitbucketInstalled: bitbucketVersion !== 'Not found',
+    bitbucketVersion
+  };
+  if (state.gitlabInstalled) {
+    try {
+      const raw = execFileSync('glab', ['repo', 'list', '--member', '-F', 'json', '-P', '8'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const records = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(records)) {
+        state.gitlabReady = true;
+        state.gitlabRepos = records.slice(0, 8).map((item) => ({
+          name: item.path_with_namespace || item.name_with_namespace || item.full_name || item.name || '',
+          url: item.web_url || item.webUrl || '',
+          cloneUrl: item.http_url_to_repo || item.httpUrlToRepo || ''
+        }));
+      }
+    } catch {
+      state.gitlabReady = false;
+    }
+  }
+  return state;
+}
+
+function renderGitLabCliRepos(state) {
+  if (!state.gitlabInstalled) return '<p class="muted">GitLab CLI is not installed.</p>';
+  if (!state.gitlabReady) return '<p class="muted">GitLab CLI is installed but not authenticated yet.</p>';
+  if (!state.gitlabRepos.length) return '<p class="muted">No GitLab repositories returned.</p>';
+  return state.gitlabRepos.map((repo) => '<div class="remote-repo-row"><div class="remote-repo-copy"><strong>' + escapeHtml(repo.name) + '</strong><small>GitLab CLI</small></div><button data-external-url="' + escapeHtml(repo.url) + '">Open</button><button data-provider-clone="' + escapeHtml(repo.cloneUrl) + '">Clone</button></div>').join('');
+}
+
+async function runProviderBridge(action) {
+  const terminal = vscode.window.createTerminal({ name: 'Galaxy Provider Bridge' });
+  terminal.show();
+  const commands = {
+    gitlabLogin: 'glab auth login',
+    gitlabRepos: 'glab repo list --member -F json -P 20',
+    bitbucketSetup: 'twg setup bitbucket',
+    bitbucketRepos: 'twg bitbucket repo query'
+  };
+  if (!commands[action]) return false;
+  terminal.sendText(commands[action], true);
+  return true;
+}
+
 function widgetAttr(state, id) {
   return state.widgets?.hidden?.includes(id)
     ? ' data-widget="' + id + '" style="display:none"'
@@ -1640,6 +1691,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     devServer,
     github,
     githubCollaboration,
+    providerBridge: getProviderBridgeState(),
     recentFiles,
     ai: getAiHudState(),
     projectNote: context ? getProjectNote(context, extensionUri) : '',
@@ -1819,6 +1871,10 @@ function getDashboardHtml(state) {
   .collab-row{display:flex;width:100%;gap:8px;align-items:center;margin-top:7px}
   .collab-row span{min-width:62px;color:var(--cyan)}
   .collab-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .provider-bridge{margin-top:14px;padding:14px;border:1px solid rgba(139,92,255,.16);border-radius:14px;background:rgba(139,92,255,.025)}
+  .provider-bridge-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .provider-box{padding:12px;border:1px solid rgba(0,247,255,.1);border-radius:12px;background:rgba(0,247,255,.014)}
+  .provider-box-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}
   .commit-line{margin-top:11px;padding:10px 12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;color:var(--muted);font-size:11px}
   .command-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
   .command-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
@@ -2018,6 +2074,38 @@ function getDashboardHtml(state) {
         <div class="project-group-title" style="margin-top:14px">RECENT GITHUB REPOSITORIES</div>
         <div class="remote-repo-list">
           ${renderGitHubRepos(state.github)}
+        </div>
+
+        <div class="provider-bridge">
+          <div class="project-group-title">PROVIDER-NATIVE BRIDGE</div>
+          <div class="provider-bridge-grid">
+            <div class="provider-box">
+              <div class="provider-box-head">
+                <div>
+                  <strong>GitLab</strong>
+                  <div class="muted">${state.providerBridge.gitlabInstalled ? escapeHtml(state.providerBridge.gitlabVersion) : 'glab not installed'}</div>
+                </div>
+                <div class="launcher-actions">
+                  <button data-provider-action="gitlabLogin">Login</button>
+                  <button data-provider-action="gitlabRepos">Repos</button>
+                </div>
+              </div>
+              <div class="remote-repo-list">${renderGitLabCliRepos(state.providerBridge)}</div>
+            </div>
+            <div class="provider-box">
+              <div class="provider-box-head">
+                <div>
+                  <strong>Bitbucket</strong>
+                  <div class="muted">${state.providerBridge.bitbucketInstalled ? escapeHtml(state.providerBridge.bitbucketVersion) : 'twg not installed'}</div>
+                </div>
+                <div class="launcher-actions">
+                  <button data-provider-action="bitbucketSetup">Setup</button>
+                  <button data-provider-action="bitbucketRepos">Repos</button>
+                </div>
+              </div>
+              <p class="muted">Provider-native Bitbucket commands run through Atlassian TWG CLI when available.</p>
+            </div>
+          </div>
         </div>
       </div>
     </article>
@@ -2305,6 +2393,18 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'openExternalUrl', value: button.dataset.externalUrl });
     });
   });
+
+  document.querySelectorAll('[data-provider-clone]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'cloneRepository', value: button.dataset.providerClone });
+    });
+  });
+
+  document.querySelectorAll('[data-provider-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'providerBridge', value: button.dataset.providerAction });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -2368,6 +2468,8 @@ async function runAction(command, value, context) {
       return createGitHubIssue(context?.extensionUri);
     case 'createGitHubPullRequest':
       return createGitHubPullRequest(context?.extensionUri);
+    case 'providerBridge':
+      return runProviderBridge(value);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
