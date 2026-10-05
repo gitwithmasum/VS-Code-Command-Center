@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.2
+
+- Added direct AI HUD prompt preview inside the Command Center dashboard.
+- Added Copy Prompt for re-copying the latest generated prompt without relying on Ctrl+V testing.
+- AI prompt preview is kept in memory for the current VS Code session and is not persisted to disk.
+- AI HUD now re-renders immediately after prompt generation.
+
 ## 2.0.1
 
 - Fixed AI HUD code selection being lost when the Command Center webview takes focus.
