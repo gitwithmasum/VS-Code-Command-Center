@@ -23,16 +23,24 @@ async function getGitState(extensionUri) {
     const git = gitExtension.exports.getAPI(1);
     if (!git) return fallback;
 
-    let repo = git.repositories[0];
+    let repo;
 
-    if (!repo && extensionUri) {
-      try {
-        repo = await git.openRepository(extensionUri);
-      } catch (error) {
-        console.error('[Galaxy Command Center] Could not open extension repo directly:', error);
+    if (extensionUri) {
+      const extensionPath = extensionUri.fsPath.toLowerCase();
+      repo = git.repositories.find((item) =>
+        extensionPath.startsWith(item.rootUri.fsPath.toLowerCase())
+      );
+
+      if (!repo) {
+        try {
+          repo = git.openRepository(extensionUri);
+        } catch (error) {
+          console.error('[Galaxy Command Center] Could not open extension repo directly:', error);
+        }
       }
     }
 
+    repo = repo || git.repositories[0];
     if (!repo) return fallback;
     const head = repo.state.HEAD;
     const branch = head?.name || 'Detached';
@@ -359,19 +367,6 @@ async function openDashboard(context) {
 async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
 
-  if (
-    context.extensionMode === vscode.ExtensionMode.Development &&
-    (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0)
-  ) {
-    try {
-      console.log('[Galaxy Command Center] No workspace detected. Opening extension folder...');
-      await vscode.commands.executeCommand('vscode.openFolder', context.extensionUri, false);
-      return;
-    } catch (error) {
-      console.error('[Galaxy Command Center] Failed to auto-open extension workspace:', error);
-    }
-  }
-
   const sidebarProvider = new GalaxySidebarProvider(context.extensionUri);
 
   context.subscriptions.push(
@@ -402,6 +397,12 @@ async function activate(context) {
   statusItem.command = 'galaxyCommandCenter.open';
   statusItem.show();
   context.subscriptions.push(statusItem);
+
+  if (context.extensionMode === vscode.ExtensionMode.Development) {
+    setTimeout(() => {
+      vscode.commands.executeCommand('galaxyCommandCenter.open');
+    }, 700);
+  }
 }
 
 function deactivate() {}
