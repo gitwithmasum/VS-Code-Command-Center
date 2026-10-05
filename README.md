@@ -8,15 +8,17 @@ A futuristic VS Code developer command center with project launching, Git insigh
 
 The goal is to make common developer actions easier to reach while keeping the interface clean, futuristic, and useful for everyday coding.
 
-## v1.0 starter
+## v1.1 — Activity Bar + Live Git Telemetry
 
 The first milestone includes:
 
-- Command Palette entry: `Galaxy Command Center: Open Dashboard`
-- Futuristic webview dashboard shell
-- Current workspace name
-- Quick actions for Terminal, Explorer, Source Control, and Theme Selector
-- Foundation for Git insights, recent files, project health, and project launcher
+- Dedicated **Galaxy Command Center** Activity Bar icon
+- Futuristic sidebar control panel
+- Full Command Center webview dashboard
+- Live workspace name
+- Live Git branch, working change count, and sync telemetry
+- Quick actions for Terminal, Explorer, Source Control, Theme Selector, and refresh
+- Foundation for Recent Files, Project Launcher, Project Health, and Dev Modes
 
 ## Planned modules
 
@@ -69,9 +71,9 @@ VS-Code-Command-Center/
 
 ## Roadmap
 
-### v1.0 — Command Center Core
+### v1.1 — Command Center Core
 
-Dashboard, workspace info, quick actions, terminal control, source control access, and theme selector.
+Dashboard, Activity Bar control panel, live Git telemetry, workspace info, quick actions, terminal control, source control access, and theme selector.
 
 ### v1.5 — Smart Workspace
 
