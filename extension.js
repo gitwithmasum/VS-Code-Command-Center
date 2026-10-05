@@ -2214,6 +2214,17 @@ function getDashboardHtml(state) {
   .provider-bridge-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
   .provider-box{padding:12px;border:1px solid rgba(0,247,255,.1);border-radius:12px;background:rgba(0,247,255,.014)}
   .provider-box-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}
+  .advanced-repo{margin-top:14px;padding:14px;border:1px solid rgba(0,247,255,.14);border-radius:14px;background:rgba(0,247,255,.018)}
+  .advanced-repo-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+  .advanced-repo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .advanced-box{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .advanced-box-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:9px}
+  .repo-file-row{display:flex;width:100%;gap:8px;align-items:center;margin-top:7px}
+  .repo-file-row span{min-width:30px;color:var(--cyan)}
+  .repo-file-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .repo-file-row.conflict{border-color:rgba(255,79,216,.35)}
+  .branch-clean-row{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:8px;padding:8px;border:1px solid rgba(0,247,255,.08);border-radius:9px}
+  .action-run-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
   .commit-line{margin-top:11px;padding:10px 12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;color:var(--muted);font-size:11px}
   .command-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
   .command-group{border:1px solid rgba(0,247,255,.11);border-radius:14px;padding:12px;background:rgba(0,247,255,.018)}
@@ -2258,7 +2269,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -2388,6 +2399,56 @@ function getDashboardHtml(state) {
       </div>
 
       <div class="commit-line">Last commit: ${lastCommit}</div>
+
+      <div class="advanced-repo">
+        <div class="advanced-repo-head">
+          <div>
+            <strong>ADVANCED REPOSITORY WORKFLOW</strong>
+            <div class="muted">Conflicts, diffs, tags, releases, reviews, Actions, and safe cleanup</div>
+          </div>
+          <div class="launcher-actions">
+            <button data-command="safeCommitPush"><span>✓</span>Safe Commit & Push</button>
+            <button data-command="openPrReviewCenter"><span>⑂</span>PR Review Center</button>
+          </div>
+        </div>
+
+        <div class="advanced-repo-grid">
+          <div class="advanced-box">
+            <div class="advanced-box-head">
+              <strong>MERGE CONFLICT ASSISTANT</strong>
+              <span class="muted">${state.advancedRepo.conflicts.length} conflict(s)</span>
+            </div>
+            ${renderConflictFiles(state.advancedRepo.conflicts)}
+          </div>
+
+          <div class="advanced-box">
+            <div class="advanced-box-head">
+              <strong>DIFF / FILE CHANGES</strong>
+              <span class="muted">${state.advancedRepo.changedFiles.length} shown</span>
+            </div>
+            ${renderChangedFiles(state.advancedRepo.changedFiles)}
+          </div>
+
+          <div class="advanced-box">
+            <div class="advanced-box-head">
+              <strong>TAGS & RELEASES</strong>
+              <div class="launcher-actions">
+                <button data-command="createGitTag">Create Tag</button>
+                <button data-command="createDraftRelease">Draft Release</button>
+              </div>
+            </div>
+            <div class="muted">${state.advancedRepo.tags.length ? 'Recent tags: ' + escapeHtml(state.advancedRepo.tags.join(', ')) : 'No tags yet.'}</div>
+          </div>
+
+          <div class="advanced-box">
+            <div class="advanced-box-head">
+              <strong>BRANCH CLEANUP</strong>
+              <span class="muted">Merged local branches only</span>
+            </div>
+            ${renderMergedBranches(state.advancedRepo.mergedBranches)}
+          </div>
+        </div>
+      </div>
 
       <div class="github-panel">
         <div class="github-head">
