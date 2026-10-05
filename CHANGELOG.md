@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.0
+
+- Added GitHub Issues, Pull Requests, and Actions workflow status for the current GitHub repository.
+- Added Create GitHub Repository and Publish Current Project workflows.
+- Added Create GitHub Issue and Create Pull Request actions.
+- Added provider-native GitLab integration through the official `glab` CLI when installed and authenticated.
+- Added provider-native Bitbucket bridge through Atlassian `twg` CLI commands when installed.
+- Added GitLab repository listing, Open, and Clone actions through `glab`.
+- Kept GitLab, Bitbucket, Azure DevOps, and generic remotes fully compatible with Fetch, Pull, Push, Sync, branches, origin, clone, and Open Remote.
+- Added a warning before publishing when common root-level sensitive files are detected.
+
+
 ## 2.2.1
 
 - Improved Windows reliability for Fetch, Pull, Push, and Sync by preferring VS Code's built-in Git commands.
