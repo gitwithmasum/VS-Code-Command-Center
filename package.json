@@ -70,5 +70,13 @@
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gitwithmasum/VS-Code-Command-Center.git"
+  },
+  "homepage": "https://github.com/gitwithmasum/VS-Code-Command-Center#readme",
+  "bugs": {
+    "url": "https://github.com/gitwithmasum/VS-Code-Command-Center/issues"
   }
 }
