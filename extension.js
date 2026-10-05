@@ -194,8 +194,17 @@ class GalaxySidebarProvider {
   }
 }
 
-function activate(context) {
+async function activate(context) {
   const sidebarProvider = new GalaxySidebarProvider(context.extensionUri);
+
+  try {
+    const gitExtension = vscode.extensions.getExtension('vscode.git');
+    if (gitExtension && !gitExtension.isActive) {
+      await gitExtension.activate();
+    }
+  } catch {
+    // Git telemetry gracefully falls back when the built-in Git extension is unavailable.
+  }
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
