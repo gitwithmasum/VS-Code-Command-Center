@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2
+
+- Simplified dashboard rendering to a self-contained webview for maximum reliability.
+- Switched to always-on activation during development to eliminate command activation edge cases.
+- Added explicit dashboard error handling and Extension Host console logging.
+- Added a Galaxy status bar launcher as a second reliable way to open the dashboard.
+- Kept Git telemetry graceful when Git is unavailable.
+
 ## 1.1.1
 
 - Added a proper VS Code Extension Development Host launch configuration for reliable F5 testing.
