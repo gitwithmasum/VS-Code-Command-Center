@@ -55,6 +55,14 @@ The dashboard can now remember and launch projects:
 - Pinned Commands
 - One-click rerun and custom command pinning
 
+## Developer Modes + Theme Matrix — v1.7
+
+- Frontend, Python, AI/ML, Debug, Study, and Focus modes
+- Focus Mode powered by VS Code Zen Mode
+- Installed-theme discovery
+- One-click Theme Matrix switching
+- Active mode and current theme indicators
+
 ## Planned modules
 
 - Project Launcher
