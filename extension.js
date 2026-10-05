@@ -25,9 +25,13 @@ function runGit(cwd, args) {
 
 async function getGitState(extensionUri) {
   const fallback = { branch: 'No Git repo', changes: 0, sync: 'Offline' };
-  if (!extensionUri?.fsPath) return fallback;
 
-  const cwd = extensionUri.fsPath;
+  const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+  const repoUri = workspaceUri || extensionUri;
+
+  if (!repoUri?.fsPath) return fallback;
+
+  const cwd = repoUri.fsPath;
   const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);
   if (inside !== 'true') return fallback;
 
@@ -65,6 +69,7 @@ async function getWorkspaceState(extensionUri, version = 'dev') {
   return {
     workspaceName,
     version,
+    repoPath: vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || extensionUri?.fsPath || '',
     ...git
   };
 }
