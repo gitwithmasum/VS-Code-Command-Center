@@ -2805,6 +2805,30 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'providerBridge', value: button.dataset.providerAction });
     });
   });
+
+  document.querySelectorAll('[data-diff-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openChangedFileDiff', value: button.dataset.diffPath });
+    });
+  });
+
+  document.querySelectorAll('[data-conflict-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openConflictFile', value: button.dataset.conflictPath });
+    });
+  });
+
+  document.querySelectorAll('[data-delete-merged-branch]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'deleteMergedBranch', value: button.dataset.deleteMergedBranch });
+    });
+  });
+
+  document.querySelectorAll('[data-rerun-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'rerunGitHubAction', value: button.dataset.rerunAction });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -2870,6 +2894,22 @@ async function runAction(command, value, context) {
       return createGitHubPullRequest(context?.extensionUri);
     case 'providerBridge':
       return runProviderBridge(value);
+    case 'openChangedFileDiff':
+      return openChangedFileDiff(context?.extensionUri, value);
+    case 'openConflictFile':
+      return openConflictFile(context?.extensionUri, value);
+    case 'deleteMergedBranch':
+      return deleteMergedBranch(context?.extensionUri, value);
+    case 'createGitTag':
+      return createGitTag(context?.extensionUri);
+    case 'createDraftRelease':
+      return createDraftGitHubRelease(context?.extensionUri);
+    case 'rerunGitHubAction':
+      return rerunGitHubAction(context?.extensionUri, value);
+    case 'openPrReviewCenter':
+      return openPullRequestReviewCenter(context?.extensionUri);
+    case 'safeCommitPush':
+      return safeCommitAndPush(context?.extensionUri);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -3093,7 +3133,12 @@ async function openDashboard(context) {
         message.command === 'createGitHubRepository' ||
         message.command === 'publishCurrentProject' ||
         message.command === 'createGitHubIssue' ||
-        message.command === 'createGitHubPullRequest'
+        message.command === 'createGitHubPullRequest' ||
+        message.command === 'deleteMergedBranch' ||
+        message.command === 'createGitTag' ||
+        message.command === 'createDraftRelease' ||
+        message.command === 'rerunGitHubAction' ||
+        message.command === 'safeCommitPush'
       ) {
         await render();
       }
