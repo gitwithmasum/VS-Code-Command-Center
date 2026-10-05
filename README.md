@@ -32,6 +32,24 @@ The first milestone includes:
 - Focus Mode
 - Galaxy Extension Hub
 
+## Local install (recommended)
+
+For reliable testing, package and install the extension into normal VS Code instead of repeatedly using the Extension Development Host.
+
+```powershell
+npm.cmd install
+npx.cmd vsce package
+code --install-extension .\masum-galaxy-command-center-1.2.0.vsix --force
+```
+
+After installation, reload VS Code and run:
+
+```text
+Galaxy Command Center: Open Dashboard
+```
+
+The dashboard shows its installed version in the top-right status area.
+
 ## Run locally
 
 Open the repository in VS Code, then install dependencies:
