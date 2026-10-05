@@ -1,4 +1,6 @@
 const vscode = require('vscode');
+const path = require('path');
+const { execFileSync } = require('child_process');
 
 function escapeHtml(value) {
   return String(value)
@@ -9,63 +11,56 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function runGit(cwd, args) {
+  try {
+    return execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
 async function getGitState(extensionUri) {
   const fallback = { branch: 'No Git repo', changes: 0, sync: 'Offline' };
+  if (!extensionUri?.fsPath) return fallback;
 
-  try {
-    const gitExtension = vscode.extensions.getExtension('vscode.git');
-    if (!gitExtension) return fallback;
+  const cwd = extensionUri.fsPath;
+  const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (inside !== 'true') return fallback;
 
-    if (!gitExtension.isActive) {
-      await gitExtension.activate();
-    }
+  const branch =
+    runGit(cwd, ['branch', '--show-current']) ||
+    runGit(cwd, ['rev-parse', '--short', 'HEAD']) ||
+    'Detached';
 
-    const git = gitExtension.exports.getAPI(1);
-    if (!git) return fallback;
+  const status = runGit(cwd, ['status', '--porcelain']);
+  const changes = status ? status.split(/\r?\n/).filter(Boolean).length : 0;
 
-    let repo;
-
-    if (extensionUri) {
-      const extensionPath = extensionUri.fsPath.toLowerCase();
-      repo = git.repositories.find((item) =>
-        extensionPath.startsWith(item.rootUri.fsPath.toLowerCase())
-      );
-
-      if (!repo) {
-        try {
-          repo = git.openRepository(extensionUri);
-        } catch (error) {
-          console.error('[Galaxy Command Center] Could not open extension repo directly:', error);
-        }
-      }
-    }
-
-    repo = repo || git.repositories[0];
-    if (!repo) return fallback;
-    const head = repo.state.HEAD;
-    const branch = head?.name || 'Detached';
-    const changes =
-      repo.state.workingTreeChanges.length +
-      repo.state.indexChanges.length +
-      repo.state.mergeChanges.length;
-
-    const ahead = head?.ahead || 0;
-    const behind = head?.behind || 0;
-    const sync = ahead || behind ? `↑${ahead} ↓${behind}` : 'Synced';
-
-    return { branch, changes, sync };
-  } catch (error) {
-    console.error('[Galaxy Command Center] Git telemetry failed:', error);
-    return fallback;
+  let sync = 'Local';
+  const upstream = runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (upstream) {
+    const counts = runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{u}']);
+    const [aheadRaw, behindRaw] = counts.split(/\s+/);
+    const ahead = Number(aheadRaw || 0);
+    const behind = Number(behindRaw || 0);
+    sync = ahead || behind ? `↑${ahead} ↓${behind}` : 'Synced';
   }
+
+  return { branch, changes, sync };
 }
 
 async function getWorkspaceState(extensionUri) {
   const git = await getGitState(extensionUri);
 
-  const workspaceName =
-    vscode.workspace.workspaceFolders?.[0]?.name ||
-    (extensionUri ? extensionUri.path.split('/').filter(Boolean).pop() : 'No workspace open');
+  let workspaceName = 'No workspace open';
+  if (vscode.workspace.workspaceFolders?.[0]?.name) {
+    workspaceName = vscode.workspace.workspaceFolders[0].name;
+  } else if (extensionUri?.fsPath) {
+    workspaceName = path.basename(extensionUri.fsPath);
+  }
 
   return {
     workspaceName,
