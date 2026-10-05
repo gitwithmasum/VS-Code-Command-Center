@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{stylesUri}}" />
+  <title>Masum Galaxy // Command Center</title>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MASUM GALAXY</p>
+        <h1>// COMMAND CENTER</h1>
+      </div>
+      <div class="status"><span class="orb"></span> SYSTEM ONLINE</div>
+    </header>
+
+    <section class="grid">
+      <article class="card hero-card">
+        <p class="label">ACTIVE WORKSPACE</p>
+        <h2>{{workspaceName}}</h2>
+        <p class="muted">Developer cockpit initialized.</p>
+      </article>
+
+      <article class="card">
+        <p class="label">QUICK ACTIONS</p>
+        <div class="actions">
+          <button data-command="terminal">Open Terminal</button>
+          <button data-command="explorer">Explorer</button>
+          <button data-command="sourceControl">Source Control</button>
+          <button data-command="theme">Theme Selector</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <p class="label">MISSION CONTROL</p>
+        <div class="metric"><span>Git Branch</span><strong>Coming next</strong></div>
+        <div class="metric"><span>Project Health</span><strong>Coming next</strong></div>
+        <div class="metric"><span>Recent Files</span><strong>Coming next</strong></div>
+      </article>
+
+      <article class="card">
+        <p class="label">ROADMAP</p>
+        <ul>
+          <li>Project launcher</li>
+          <li>Git insights</li>
+          <li>Workspace health</li>
+          <li>Theme matrix</li>
+          <li>Developer modes</li>
+        </ul>
+      </article>
+    </section>
+  </main>
+
+  <script src="{{scriptUri}}"></script>
+</body>
+</html>
