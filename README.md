@@ -81,6 +81,18 @@ The AI HUD only prepares context and copies prompts locally. It does not send pr
 - Safe restore of theme, mode label, dashboard visibility, pinned commands, project note, and active file
 - Snapshot restore does not switch Git branches or modify project file contents
 
+## Repository Collaboration Hub — v2.2
+
+- Unified local Git and remote-host repository control
+- GitHub, GitLab, Bitbucket, Azure DevOps, and generic Git remote detection
+- Fetch, Pull, Push, Sync, Stage/Unstage, Commit
+- Branch creation and switching
+- Initialize repository, manage origin, open remote, and clone repository
+- Secure GitHub account connection through VS Code Authentication
+- Recently updated GitHub repositories with Open and Clone actions
+
+GitHub account-level integration uses the user's existing VS Code authentication session and does not store the token in extension files. GitLab, Bitbucket, Azure DevOps, and other Git hosts already work for standard Git remote operations; deeper account-level APIs can be added provider-by-provider.
+
 ## Planned modules
 
 - Project Launcher
