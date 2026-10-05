@@ -626,6 +626,201 @@ function renderThemeMatrix(themeState) {
     .join('');
 }
 
+
+const DASHBOARD_WIDGETS = [
+  { id: 'health', label: 'Project Health' },
+  { id: 'environment', label: 'Environment Status' },
+  { id: 'server', label: 'Dev Server Monitor' },
+  { id: 'smartActions', label: 'Smart Project Actions' },
+  { id: 'git', label: 'Git Control Center' },
+  { id: 'commands', label: 'Command History + Pinned Commands' },
+  { id: 'modes', label: 'Developer Modes' },
+  { id: 'themes', label: 'Theme Matrix' },
+  { id: 'ai', label: 'AI HUD' },
+  { id: 'extensions', label: 'Galaxy Extension Hub' },
+  { id: 'projects', label: 'Project Launcher' },
+  { id: 'files', label: 'Recent Files' }
+];
+
+function getWidgetState(context) {
+  return {
+    hidden: context?.globalState.get('galaxy.hiddenWidgets', []) || []
+  };
+}
+
+async function customizeDashboardWidgets(context) {
+  if (!context) return false;
+
+  const hidden = context.globalState.get('galaxy.hiddenWidgets', []);
+  const items = DASHBOARD_WIDGETS.map((widget) => ({
+    label: widget.label,
+    description: widget.id,
+    picked: !hidden.includes(widget.id),
+    widgetId: widget.id
+  }));
+
+  const selected = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: 'Customize Galaxy Command Center',
+    placeHolder: 'Select the widgets you want to keep visible'
+  });
+
+  if (!selected) return false;
+
+  const visibleIds = new Set(selected.map((item) => item.widgetId));
+  const nextHidden = DASHBOARD_WIDGETS
+    .map((widget) => widget.id)
+    .filter((id) => !visibleIds.has(id));
+
+  await context.globalState.update('galaxy.hiddenWidgets', nextHidden);
+  return true;
+}
+
+function getGalaxyExtensions() {
+  return vscode.extensions.all
+    .filter((extension) => {
+      const publisher = String(extension.packageJSON?.publisher || '').toLowerCase();
+      const name = String(extension.packageJSON?.displayName || extension.packageJSON?.name || '').toLowerCase();
+      return publisher === 'gitwithmasum' || /masum|galaxy/.test(name);
+    })
+    .map((extension) => ({
+      id: extension.id,
+      name: extension.packageJSON?.displayName || extension.packageJSON?.name || extension.id,
+      version: extension.packageJSON?.version || '',
+      active: extension.isActive
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderGalaxyExtensions(extensions) {
+  if (!extensions.length) {
+    return '<p class="muted">No Masum/Galaxy extensions detected in this VS Code profile.</p>';
+  }
+
+  return extensions
+    .map(
+      (extension) => `
+        <div class="hub-row">
+          <div class="hub-copy">
+            <strong>${escapeHtml(extension.name)}</strong>
+            <small>${escapeHtml(extension.id)} · v${escapeHtml(extension.version)} · ${extension.active ? 'Active' : 'Installed'}</small>
+          </div>
+          <button data-extension-id="${escapeHtml(extension.id)}">Marketplace</button>
+        </div>`
+    )
+    .join('');
+}
+
+function getAiHudState() {
+  const editor = vscode.window.activeTextEditor;
+  const selectedText = editor && !editor.selection.isEmpty
+    ? editor.document.getText(editor.selection)
+    : '';
+  const diagnostics = editor ? vscode.languages.getDiagnostics(editor.document.uri) : [];
+
+  return {
+    file: editor ? path.basename(editor.document.fileName) : 'No active editor',
+    selectionLength: selectedText.length,
+    diagnostics: diagnostics.length
+  };
+}
+
+function truncatePromptText(value, limit = 12000) {
+  const text = String(value || '');
+  return text.length > limit ? text.slice(0, limit) + '\n\n[truncated]' : text;
+}
+
+async function createAiPrompt(kind, extensionUri) {
+  const editor = vscode.window.activeTextEditor;
+  const root = getWorkspaceRoot(extensionUri);
+
+  if (kind === 'selection') {
+    if (!editor || editor.selection.isEmpty) {
+      vscode.window.showWarningMessage('Select some code first, then use Explain Selection.');
+      return '';
+    }
+
+    const selected = truncatePromptText(editor.document.getText(editor.selection));
+    const language = editor.document.languageId;
+    return `Explain this ${language} code clearly. Identify what it does, important logic, possible bugs, and practical improvements.\n\n${selected}`;
+  }
+
+  if (kind === 'diagnostics') {
+    if (!editor) {
+      vscode.window.showWarningMessage('Open a file first, then use Diagnose Current File.');
+      return '';
+    }
+
+    const diagnostics = vscode.languages.getDiagnostics(editor.document.uri).slice(0, 25);
+    const details = diagnostics.length
+      ? diagnostics.map((item) => `Line ${item.range.start.line + 1}: ${item.message}`).join('\n')
+      : 'VS Code currently reports no diagnostics for this file.';
+
+    return `Review the current file diagnostics and suggest precise fixes. File: ${path.basename(editor.document.fileName)}\nLanguage: ${editor.document.languageId}\n\nDiagnostics:\n${details}`;
+  }
+
+  if (kind === 'commit') {
+    if (!root) return '';
+
+    const staged = runGit(root, ['diff', '--cached', '--no-ext-diff', '--unified=2']);
+    const working = staged || runGit(root, ['diff', '--no-ext-diff', '--unified=2']);
+    const status = runGit(root, ['status', '--short']);
+
+    return `Generate a concise conventional Git commit message for these changes. Return a strong subject line and, only if useful, a short body.\n\nStatus:\n${status || 'No status output'}\n\nDiff:\n${truncatePromptText(working || 'No diff available.')}`;
+  }
+
+  return '';
+}
+
+async function copyAiPrompt(kind, extensionUri) {
+  const prompt = await createAiPrompt(kind, extensionUri);
+  if (!prompt) return false;
+
+  await vscode.env.clipboard.writeText(prompt);
+  vscode.window.showInformationMessage('Galaxy AI HUD prompt copied to clipboard.');
+  return true;
+}
+
+async function openAvailableChat() {
+  const commands = await vscode.commands.getCommands(true);
+  const candidates = [
+    'workbench.action.chat.open',
+    'workbench.action.quickchat.toggle'
+  ];
+
+  const command = candidates.find((candidate) => commands.includes(candidate));
+  if (!command) {
+    vscode.window.showInformationMessage('No compatible VS Code Chat command is available. Your AI HUD prompt is still ready to paste.');
+    return false;
+  }
+
+  await vscode.commands.executeCommand(command);
+  return true;
+}
+
+async function openGalaxyExtension(extensionId) {
+  if (!extensionId) return;
+  const url = `https://marketplace.visualstudio.com/items?itemName=${encodeURIComponent(extensionId)}`;
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+async function searchGalaxyExtensions() {
+  const commands = await vscode.commands.getCommands(true);
+  if (commands.includes('workbench.extensions.search')) {
+    await vscode.commands.executeCommand('workbench.extensions.search', '@publisher:gitwithmasum');
+    return;
+  }
+
+  const url = 'https://marketplace.visualstudio.com/search?term=gitwithmasum&target=VSCode';
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+function widgetAttr(state, id) {
+  return state.widgets?.hidden?.includes(id)
+    ? ' data-widget="' + id + '" style="display:none"'
+    : ' data-widget="' + id + '"';
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer] = await Promise.all([
     getGitState(extensionUri),
@@ -652,6 +847,9 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     environment,
     devServer,
     recentFiles,
+    ai: getAiHudState(),
+    galaxyExtensions: getGalaxyExtensions(),
+    widgets: context ? getWidgetState(context) : { hidden: [] },
     mode: context ? getDeveloperModeState(context) : { active: 'Default' },
     themes: getInstalledThemes(),
     commands: context ? getCommandState(context) : { history: [], pinned: [] },
@@ -821,7 +1019,20 @@ function getDashboardHtml(state) {
   .theme-tile strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .theme-tile.active{border-color:var(--cyan);background:rgba(0,247,255,.08);box-shadow:0 0 22px rgba(0,247,255,.12)}
   .theme-meta{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}}
+  .top-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .top-actions button{padding:9px 11px}
+  .ai-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .ai-stat{padding:13px;border:1px solid rgba(255,79,216,.18);border-radius:12px;background:rgba(255,79,216,.035)}
+  .ai-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .ai-stat strong{font-size:14px}
+  .ai-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
+  .hub-list{display:grid;gap:9px}
+  .hub-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px;border:1px solid rgba(0,247,255,.11);border-radius:12px;background:rgba(0,247,255,.018)}
+  .hub-copy{display:flex;flex-direction:column;min-width:0}
+  .hub-copy strong,.hub-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hub-copy small{color:var(--muted);margin-top:4px}
+  .hub-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -832,7 +1043,10 @@ function getDashboardHtml(state) {
       <p class="brand">MASUM GALAXY</p>
       <h1>// COMMAND CENTER</h1>
     </div>
-    <div class="online"><span class="orb"></span>SYSTEM ONLINE · v${version}</div>
+    <div class="top-actions">
+      <button data-command="customizeDashboard"><span>⚙</span>Customize Dashboard</button>
+      <div class="online"><span class="orb"></span>SYSTEM ONLINE · v${version}</div>
+    </div>
   </header>
 
   <section class="telemetry">
@@ -862,7 +1076,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'health')}>
       <div class="label">PROJECT HEALTH</div>
       <div class="health-grid">
         <div class="health-box"><span>ERRORS</span><strong>${state.health.errors}</strong></div>
@@ -875,7 +1089,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'environment')}>
       <div class="label">ENVIRONMENT STATUS</div>
       <div class="env-grid">
         <div class="env-box"><span>NODE</span><strong>${escapeHtml(state.environment.node)}</strong></div>
@@ -886,7 +1100,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'server')}>
       <div class="label">DEV SERVER MONITOR</div>
       <div class="server-line">
         <div>
@@ -900,14 +1114,14 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card">
+    <article class="card"${widgetAttr(state, 'smartActions')}>
       <div class="label">SMART PROJECT ACTIONS</div>
       <div class="smart-grid">
         ${renderSmartActions(state.project.actions)}
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'git')}>
       <div class="label">GIT CONTROL CENTER</div>
       <div class="git-grid">
         <div class="git-box"><span>BRANCH</span><strong>${branch}</strong></div>
@@ -924,7 +1138,7 @@ function getDashboardHtml(state) {
       <div class="commit-line">Last commit: ${lastCommit}</div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'commands')}>
       <div class="launcher-head">
         <div>
           <div class="label">COMMAND HISTORY + PINNED COMMANDS</div>
@@ -947,7 +1161,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'modes')}>
       <div class="label">DEVELOPER MODES</div>
       <div class="mode-grid">
         <button class="mode-btn ${state.mode.active === 'Frontend' ? 'active' : ''}" data-dev-mode="Frontend">
@@ -978,7 +1192,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'themes')}>
       <div class="theme-meta">
         <div>
           <div class="label">THEME MATRIX</div>
@@ -991,7 +1205,36 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'ai')}>
+      <div class="label">AI HUD</div>
+      <div class="ai-grid">
+        <div class="ai-stat"><span>ACTIVE FILE</span><strong>${escapeHtml(state.ai.file)}</strong></div>
+        <div class="ai-stat"><span>SELECTED CHARS</span><strong>${state.ai.selectionLength}</strong></div>
+        <div class="ai-stat"><span>DIAGNOSTICS</span><strong>${state.ai.diagnostics}</strong></div>
+      </div>
+      <div class="ai-actions">
+        <button data-ai-action="selection"><span>✦</span>Explain Selection</button>
+        <button data-ai-action="diagnostics"><span>⚠</span>Diagnose File</button>
+        <button data-ai-action="commit"><span>⑂</span>Commit Prompt</button>
+        <button data-command="openChat"><span>◫</span>Open Chat</button>
+      </div>
+      <p class="muted" style="margin-top:12px;margin-bottom:0">AI HUD prepares real editor/Git context and copies a prompt to your clipboard. It does not send project data anywhere by itself.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'extensions')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">GALAXY EXTENSION HUB</div>
+          <div class="muted">${state.galaxyExtensions.length} matching extension(s) detected</div>
+        </div>
+        <button data-command="searchGalaxyExtensions"><span>⌕</span>Browse gitwithmasum</button>
+      </div>
+      <div class="hub-list">
+        ${renderGalaxyExtensions(state.galaxyExtensions)}
+      </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'projects')}>
       <div class="launcher-head">
         <div>
           <div class="label">PROJECT LAUNCHER</div>
@@ -1015,7 +1258,7 @@ function getDashboardHtml(state) {
       </div>
     </article>
 
-    <article class="card wide">
+    <article class="card wide"${widgetAttr(state, 'files')}>
       <div class="label">RECENT FILES</div>
       <div class="files">
         ${renderRecentFiles(state.recentFiles)}
@@ -1095,6 +1338,18 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'applyTheme', value: button.dataset.themeLabel });
     });
   });
+
+  document.querySelectorAll('[data-ai-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'aiPrompt', value: button.dataset.aiAction });
+    });
+  });
+
+  document.querySelectorAll('[data-extension-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openGalaxyExtension', value: button.dataset.extensionId });
+    });
+  });
 </script>
 </body>
 </html>`;
@@ -1119,6 +1374,16 @@ async function runAction(command, value, context) {
       return vscode.commands.executeCommand('workbench.action.toggleZenMode');
     case 'applyTheme':
       return applyTheme(value);
+    case 'customizeDashboard':
+      return customizeDashboardWidgets(context);
+    case 'aiPrompt':
+      return copyAiPrompt(value, context?.extensionUri);
+    case 'openChat':
+      return openAvailableChat();
+    case 'openGalaxyExtension':
+      return openGalaxyExtension(value);
+    case 'searchGalaxyExtensions':
+      return searchGalaxyExtensions();
     case 'runTerminal': {
       await recordCommand(context, value);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
@@ -1280,7 +1545,8 @@ async function openDashboard(context) {
         message.command === 'clearHistory' ||
         message.command === 'developerMode' ||
         message.command === 'focusMode' ||
-        message.command === 'applyTheme'
+        message.command === 'applyTheme' ||
+        message.command === 'customizeDashboard'
       ) {
         await render();
       }
@@ -1325,6 +1591,15 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('galaxyCommandCenter.refresh', async () => {
       await sidebarProvider.refresh();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('galaxyCommandCenter.customize', async () => {
+      const changed = await customizeDashboardWidgets(context);
+      if (changed) {
+        vscode.window.showInformationMessage('Galaxy dashboard widget layout updated.');
+      }
     })
   );
 
