@@ -20,6 +20,16 @@ The first milestone includes:
 - Quick actions for Terminal, Explorer, Source Control, Theme Selector, and refresh
 - Foundation for Recent Files, Project Launcher, Project Health, and Dev Modes
 
+## Smart Workspace — v1.3
+
+The dashboard now includes:
+
+- Project type detection
+- Project Health: errors, warnings, TODO/FIXME count
+- Recent workspace files with one-click opening
+- Smart project actions that adapt to Node.js, React/Vite, Next.js, Python, and VS Code extension projects
+- Live Git branch, change count, and sync state
+
 ## Planned modules
 
 - Project Launcher
