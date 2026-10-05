@@ -25,6 +25,8 @@ let githubStateCache = {
   value: null
 };
 
+let githubCollaborationCache = { key: '', at: 0, value: null };
+
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
@@ -497,6 +499,177 @@ function renderGitHubRepos(github) {
         </div>`
     )
     .join('');
+}
+
+function githubApiRequest(pathname, token, method = 'GET', body = null) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : '';
+    const headers = {
+      Accept: 'application/vnd.github+json',
+      Authorization: 'Bearer ' + token,
+      'User-Agent': 'Masum-Galaxy-Command-Center',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const request = https.request({ hostname: 'api.github.com', path: pathname, method, headers }, (response) => {
+      let responseBody = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { responseBody += chunk; });
+      response.on('end', () => {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (!responseBody) return resolve(null);
+          try { return resolve(JSON.parse(responseBody)); } catch (error) { return reject(error); }
+        }
+        reject(new Error('GitHub API ' + response.statusCode + ': ' + responseBody.slice(0, 500)));
+      });
+    });
+    request.setTimeout(7000, () => request.destroy(new Error('GitHub API request timed out.')));
+    request.on('error', reject);
+    if (payload) request.write(payload);
+    request.end();
+  });
+}
+
+function parseGitHubRemote(remoteUrl) {
+  const webUrl = remoteToWebUrl(remoteUrl);
+  const match = webUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/?#]+)$/i);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2], fullName: match[1] + '/' + match[2], webUrl };
+}
+
+async function getGitHubSession(createIfNone = false) {
+  try {
+    return await vscode.authentication.getSession('github', ['repo'], { createIfNone });
+  } catch {
+    return null;
+  }
+}
+
+async function getGitHubCollaborationState(gitState, force = false) {
+  const parsed = parseGitHubRemote(gitState && gitState.originUrl);
+  if (!parsed) return { available: false, fullName: '', issues: [], pulls: [], actions: [], error: '' };
+  const cacheKey = parsed.fullName.toLowerCase();
+  if (!force && githubCollaborationCache.value && githubCollaborationCache.key === cacheKey && Date.now() - githubCollaborationCache.at < 60000) return githubCollaborationCache.value;
+  const session = await getGitHubSession(false);
+  if (!session) return { available: false, fullName: parsed.fullName, issues: [], pulls: [], actions: [], error: 'Connect GitHub to load collaboration data.' };
+  const base = '/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo);
+  try {
+    const [issuesRaw, pullsRaw, runsRaw] = await Promise.all([
+      githubApi(base + '/issues?state=open&per_page=6&sort=updated', session.accessToken),
+      githubApi(base + '/pulls?state=open&per_page=6&sort=updated', session.accessToken),
+      githubApi(base + '/actions/runs?per_page=6', session.accessToken)
+    ]);
+    const value = {
+      available: true,
+      fullName: parsed.fullName,
+      issues: (Array.isArray(issuesRaw) ? issuesRaw : []).filter((item) => !item.pull_request).slice(0, 5).map((item) => ({ number: item.number, title: item.title || '', url: item.html_url || '' })),
+      pulls: (Array.isArray(pullsRaw) ? pullsRaw : []).slice(0, 5).map((item) => ({ number: item.number, title: item.title || '', url: item.html_url || '', draft: Boolean(item.draft) })),
+      actions: ((runsRaw && runsRaw.workflow_runs) || []).slice(0, 5).map((run) => ({ name: run.name || run.display_title || 'Workflow', status: run.conclusion || run.status || 'unknown', branch: run.head_branch || '', url: run.html_url || '' })),
+      error: ''
+    };
+    githubCollaborationCache = { key: cacheKey, at: Date.now(), value };
+    return value;
+  } catch (error) {
+    return { available: false, fullName: parsed.fullName, issues: [], pulls: [], actions: [], error: error.message || 'Unable to load GitHub collaboration data.' };
+  }
+}
+
+function renderGitHubCollaboration(state) {
+  if (state.error && !state.available) return '<p class="muted">' + escapeHtml(state.error) + '</p>';
+  const issues = state.issues.length ? state.issues.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>#' + item.number + '</span><strong>' + escapeHtml(item.title) + '</strong></button>').join('') : '<p class="muted">No open issues.</p>';
+  const pulls = state.pulls.length ? state.pulls.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>PR #' + item.number + '</span><strong>' + escapeHtml(item.title) + (item.draft ? ' · Draft' : '') + '</strong></button>').join('') : '<p class="muted">No open pull requests.</p>';
+  const actions = state.actions.length ? state.actions.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>' + escapeHtml(item.status) + '</span><strong>' + escapeHtml(item.name) + (item.branch ? ' · ' + escapeHtml(item.branch) : '') + '</strong></button>').join('') : '<p class="muted">No recent workflow runs.</p>';
+  return '<div class="collab-columns"><div class="collab-group"><div class="project-group-title">OPEN ISSUES</div>' + issues + '</div><div class="collab-group"><div class="project-group-title">PULL REQUESTS</div>' + pulls + '</div><div class="collab-group"><div class="project-group-title">ACTIONS</div>' + actions + '</div></div>';
+}
+
+async function createGitHubIssue(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const parsed = parseGitHubRemote(root ? runGit(root, ['remote', 'get-url', 'origin']) : '');
+  if (!parsed) { vscode.window.showWarningMessage('Current workspace is not linked to a GitHub repository.'); return false; }
+  const session = await getGitHubSession(true);
+  if (!session) return false;
+  const title = await vscode.window.showInputBox({ title: 'Create GitHub Issue', prompt: 'Issue title for ' + parsed.fullName });
+  if (!title || !title.trim()) return false;
+  const body = await vscode.window.showInputBox({ title: 'Issue Details', prompt: 'Optional short issue description', value: '' });
+  try {
+    const created = await githubApiRequest('/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo) + '/issues', session.accessToken, 'POST', { title: title.trim(), body: body || '' });
+    githubCollaborationCache = { key: '', at: 0, value: null };
+    vscode.window.showInformationMessage('GitHub issue #' + ((created && created.number) || '') + ' created.');
+    return true;
+  } catch (error) { vscode.window.showErrorMessage(error.message || 'Unable to create GitHub issue.'); return false; }
+}
+
+async function createGitHubPullRequest(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const parsed = parseGitHubRemote(root ? runGit(root, ['remote', 'get-url', 'origin']) : '');
+  if (!parsed) { vscode.window.showWarningMessage('Current workspace is not linked to a GitHub repository.'); return false; }
+  const session = await getGitHubSession(true);
+  if (!session) return false;
+  try {
+    const info = await githubApi('/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo), session.accessToken);
+    const head = runGit(root, ['branch', '--show-current']);
+    const base = (info && info.default_branch) || 'main';
+    if (!head) { vscode.window.showWarningMessage('No active Git branch is available.'); return false; }
+    if (head === base) { vscode.window.showWarningMessage('Create or switch to a feature branch before opening a pull request to ' + base + '.'); return false; }
+    const title = await vscode.window.showInputBox({ title: 'Create Pull Request', prompt: head + ' → ' + base, value: head.replace(/[-_/]+/g, ' ') });
+    if (!title || !title.trim()) return false;
+    const created = await githubApiRequest('/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo) + '/pulls', session.accessToken, 'POST', { title: title.trim(), head, base, body: '' });
+    githubCollaborationCache = { key: '', at: 0, value: null };
+    vscode.window.showInformationMessage('Pull request #' + ((created && created.number) || '') + ' created.');
+    return true;
+  } catch (error) { vscode.window.showErrorMessage(error.message || 'Unable to create pull request.'); return false; }
+}
+
+async function createGitHubRepository() {
+  const session = await getGitHubSession(true);
+  if (!session) return null;
+  const name = await vscode.window.showInputBox({ title: 'Create GitHub Repository', prompt: 'Repository name', placeHolder: 'my-new-project' });
+  if (!name || !name.trim()) return null;
+  const visibility = await vscode.window.showQuickPick([{ label: 'Public', value: false }, { label: 'Private', value: true }], { title: 'Repository Visibility' });
+  if (!visibility) return null;
+  const description = await vscode.window.showInputBox({ title: 'Repository Description', prompt: 'Optional description', value: '' });
+  try {
+    const created = await githubApiRequest('/user/repos', session.accessToken, 'POST', { name: name.trim().replace(/\s+/g, '-'), description: description || '', private: visibility.value, auto_init: false });
+    githubStateCache = { at: 0, value: null };
+    vscode.window.showInformationMessage('GitHub repository ' + ((created && created.full_name) || name.trim()) + ' created.');
+    return created;
+  } catch (error) { vscode.window.showErrorMessage(error.message || 'Unable to create GitHub repository.'); return null; }
+}
+
+function findSensitivePublishFiles(root) {
+  try { return fs.readdirSync(root).filter((name) => /^\.env(?:\.|$)/i.test(name) || /\.(pem|key|p12|pfx)$/i.test(name) || /credentials?|secrets?/i.test(name)); } catch { return []; }
+}
+
+async function publishCurrentProjectToGitHub(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root || !vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) { vscode.window.showWarningMessage('Open the project folder you want to publish first.'); return false; }
+  if (runGit(root, ['remote', 'get-url', 'origin'])) { vscode.window.showWarningMessage('This project already has an origin remote. Use Manage Origin or Push instead.'); return false; }
+  const sensitive = findSensitivePublishFiles(root);
+  const warning = sensitive.length ? 'Potential sensitive files detected: ' + sensitive.slice(0, 5).join(', ') + '. Review .gitignore before publishing.' : 'This may stage and commit current project files if there is no commit yet. Review .gitignore and secrets first.';
+  const confirm = await vscode.window.showWarningMessage(warning, { modal: true }, 'Continue');
+  if (confirm !== 'Continue') return false;
+  const created = await createGitHubRepository();
+  if (!created || !created.clone_url) return false;
+  if (runGit(root, ['rev-parse', '--is-inside-work-tree']) !== 'true' && runGitLocal(root, ['init'], '') === null) return false;
+  if (runGitLocal(root, ['remote', 'add', 'origin', created.clone_url], '') === null) return false;
+  const hasCommit = Boolean(runGit(root, ['rev-parse', '--verify', 'HEAD']));
+  if (!hasCommit) {
+    if (runGitLocal(root, ['add', '-A'], '') === null) return false;
+    const staged = runGit(root, ['diff', '--cached', '--name-only']);
+    if (staged && runGitLocal(root, ['commit', '-m', 'Initial commit'], '') === null) {
+      vscode.window.showWarningMessage('Repository was created and origin linked, but initial commit failed. Configure Git user.name/user.email and commit manually.');
+      return false;
+    }
+  }
+  const branch = runGit(root, ['branch', '--show-current']) || 'main';
+  if (runGitLocal(root, ['push', '-u', 'origin', branch], '') === null) { vscode.window.showWarningMessage('Repository created and origin linked, but push did not complete. Use Push after credentials are ready.'); return false; }
+  githubStateCache = { at: 0, value: null };
+  githubCollaborationCache = { key: '', at: 0, value: null };
+  vscode.window.showInformationMessage('Published current project to ' + created.full_name + '.');
+  return true;
 }
 
 async function getGitState(extensionUri) {
@@ -1447,6 +1620,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     getDevServerStatus(),
     getGitHubState()
   ]);
+  const githubCollaboration = await getGitHubCollaborationState(git);
   const environment = getEnvironmentStatus();
 
   let workspaceName = 'No workspace open';
@@ -1465,6 +1639,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     environment,
     devServer,
     github,
+    githubCollaboration,
     recentFiles,
     ai: getAiHudState(),
     projectNote: context ? getProjectNote(context, extensionUri) : '',
