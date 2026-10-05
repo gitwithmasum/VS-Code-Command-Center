@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0
+
+- Replaced the basic Git panel with a unified Repository Control Hub.
+- Added remote-provider detection for GitHub, GitLab, Bitbucket, Azure DevOps, and generic Git remotes.
+- Added Fetch, Pull, Push, Sync, Stage All, Unstage All, Commit, branch create/switch, origin management, repository initialization, remote opening, and repository cloning.
+- Added secure GitHub sign-in through VS Code Authentication without persisting tokens in extension files.
+- Added a GitHub repository list for recently updated owner/collaborator/organization repositories with Open and Clone actions.
+- Generic Git controls continue to work with non-GitHub remotes after origin is configured.
+
 ## 2.1.0
 
 - Added project-specific notes stored per workspace.
