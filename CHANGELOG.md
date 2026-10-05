@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.0
+
+- Added AI HUD that builds prompts from selected code, current-file diagnostics, and Git changes without automatically sending project data to any service.
+- Added optional VS Code Chat launching when a compatible chat command is available.
+- Added Galaxy Extension Hub with live detection of Masum/Galaxy extensions and Marketplace access.
+- Added customizable dashboard widgets with multi-select visibility controls stored in extension state.
+- Added a Command Palette action for dashboard customization.
+
 ## 1.7.0
 
 - Added Developer Modes for Frontend, Python, AI/ML, Debug, Study, and Focus workflows.
