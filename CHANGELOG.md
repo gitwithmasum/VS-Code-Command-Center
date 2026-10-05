@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+- Removed wildcard `*` activation to avoid unnecessary startup performance cost.
+- Added targeted activation for startup-finished, Command Center commands, and the sidebar view.
+- Updated the local VSIX install workflow for version 1.3.1.
+
 ## 1.3.0
 
 - Added Smart Workspace project-type detection for VS Code extensions, React/Vite, Next.js, Node.js, Python, and general workspaces.
