@@ -757,6 +757,193 @@ async function getGitState(extensionUri) {
   };
 }
 
+
+function parseStatusPath(line) {
+  const raw = String(line || '').slice(3).trim();
+  if (!raw) return '';
+  if (raw.includes(' -> ')) return raw.split(' -> ').pop().trim();
+  return raw.replace(/^"|"$/g, '');
+}
+
+function getAdvancedRepoState(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root || runGit(root, ['rev-parse', '--is-inside-work-tree']) !== 'true') {
+    return {
+      conflicts: [],
+      changedFiles: [],
+      tags: [],
+      mergedBranches: []
+    };
+  }
+
+  const status = runGit(root, ['status', '--porcelain=v1']);
+  const changedFiles = (status ? status.split(/\r?\n/) : [])
+    .filter(Boolean)
+    .map((line) => ({
+      code: line.slice(0, 2),
+      path: parseStatusPath(line)
+    }))
+    .filter((item) => item.path)
+    .slice(0, 20);
+
+  const conflicts = runGit(root, ['diff', '--name-only', '--diff-filter=U'])
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 20);
+
+  const tags = runGit(root, ['tag', '--sort=-creatordate'])
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 12);
+
+  const current = runGit(root, ['branch', '--show-current']);
+  const mergedBranches = runGit(root, ['branch', '--merged'])
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\*\s*/, '').trim())
+    .filter((name) => name && name !== current && !['main','master','develop','development'].includes(name))
+    .slice(0, 12);
+
+  return { conflicts, changedFiles, tags, mergedBranches };
+}
+
+async function openChangedFileDiff(extensionUri, relativePath) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root || !relativePath) return false;
+
+  const fileUri = vscode.Uri.file(path.join(root, relativePath));
+  const exists = fs.existsSync(fileUri.fsPath);
+
+  if (!exists) {
+    vscode.window.showWarningMessage('Changed file no longer exists in the working tree.');
+    return false;
+  }
+
+  const tracked = runGit(root, ['ls-files', '--error-unmatch', relativePath]);
+  if (!tracked) {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    return true;
+  }
+
+  const left = vscode.Uri.parse(
+    'git:' + JSON.stringify({ path: fileUri.fsPath, ref: 'HEAD' })
+  );
+
+  try {
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      left,
+      fileUri,
+      'HEAD ↔ ' + relativePath
+    );
+    return true;
+  } catch {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    return true;
+  }
+}
+
+async function openConflictFile(extensionUri, relativePath) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root || !relativePath) return false;
+
+  const uri = vscode.Uri.file(path.join(root, relativePath));
+  if (!fs.existsSync(uri.fsPath)) return false;
+
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document, { preview: false });
+
+  const commands = await vscode.commands.getCommands(true);
+  if (commands.includes('git.openMergeEditor')) {
+    try {
+      await vscode.commands.executeCommand('git.openMergeEditor', uri);
+    } catch {
+      // The file is still opened for manual conflict resolution.
+    }
+  }
+  return true;
+}
+
+async function createGitTag(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const tag = await vscode.window.showInputBox({
+    title: 'Create Git Tag',
+    prompt: 'Tag name',
+    placeHolder: 'v2.4.0',
+    validateInput: (value) => {
+      if (!value.trim()) return 'Tag name is required.';
+      if (/\s/.test(value)) return 'Tag names cannot contain spaces.';
+      return undefined;
+    }
+  });
+  if (!tag?.trim()) return false;
+
+  const message = await vscode.window.showInputBox({
+    title: 'Tag Message',
+    prompt: 'Optional annotated tag message',
+    value: ''
+  });
+
+  const args = message?.trim()
+    ? ['tag', '-a', tag.trim(), '-m', message.trim()]
+    : ['tag', tag.trim()];
+
+  if (runGitLocal(root, args, 'Git tag created.') === null) return false;
+
+  const push = await vscode.window.showInformationMessage(
+    'Push this tag to origin now?',
+    'Push Tag',
+    'Not Now'
+  );
+  if (push === 'Push Tag') {
+    return runGitLocal(root, ['push', 'origin', tag.trim()], 'Git tag pushed to origin.') !== null;
+  }
+  return true;
+}
+
+async function deleteMergedBranch(extensionUri, branchName) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root || !branchName) return false;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Delete merged local branch "' + branchName + '"?',
+    { modal: true },
+    'Delete Branch'
+  );
+  if (confirm !== 'Delete Branch') return false;
+
+  return runGitLocal(root, ['branch', '-d', branchName], 'Merged branch deleted.') !== null;
+}
+
+function renderChangedFiles(items) {
+  if (!items.length) return '<p class="muted">No working-tree changes.</p>';
+  return items.map((item) =>
+    '<button class="repo-file-row" data-diff-path="' + escapeHtml(item.path) + '">' +
+      '<span>' + escapeHtml(item.code) + '</span><strong>' + escapeHtml(item.path) + '</strong>' +
+    '</button>'
+  ).join('');
+}
+
+function renderConflictFiles(items) {
+  if (!items.length) return '<p class="muted">No merge conflicts detected.</p>';
+  return items.map((file) =>
+    '<button class="repo-file-row conflict" data-conflict-path="' + escapeHtml(file) + '">' +
+      '<span>!</span><strong>' + escapeHtml(file) + '</strong>' +
+    '</button>'
+  ).join('');
+}
+
+function renderMergedBranches(items) {
+  if (!items.length) return '<p class="muted">No safe merged local branches found.</p>';
+  return items.map((branch) =>
+    '<div class="branch-clean-row"><strong>' + escapeHtml(branch) + '</strong>' +
+    '<button data-delete-merged-branch="' + escapeHtml(branch) + '">Delete</button></div>'
+  ).join('');
+}
+
 async function readJsonIfExists(filePath) {
   try {
     const raw = await fs.promises.readFile(filePath, 'utf8');
@@ -1692,6 +1879,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     github,
     githubCollaboration,
     providerBridge: getProviderBridgeState(),
+    advancedRepo: getAdvancedRepoState(extensionUri),
     recentFiles,
     ai: getAiHudState(),
     projectNote: context ? getProjectNote(context, extensionUri) : '',
