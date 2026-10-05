@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4
+
+- Added direct repository detection using the extension installation folder.
+- Git telemetry can now work even when the Extension Development Host has no open workspace.
+- Workspace label now falls back to the extension folder name instead of showing 'No workspace open'.
+- Reduced dependence on VS Code workspace state during local extension development.
+
 ## 1.1.3
 
 - Added automatic workspace recovery in Extension Development Host.
