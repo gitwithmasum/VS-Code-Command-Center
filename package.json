@@ -2,7 +2,7 @@
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
   "description": "A futuristic VS Code developer command center with project launching, Git insights, quick actions, terminal controls, theme switching, workspace health, and productivity tools.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "gitwithmasum",
   "author": {
     "name": "Masum Billah",
@@ -28,15 +28,38 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onCommand:galaxyCommandCenter.open"
+    "onCommand:galaxyCommandCenter.open",
+    "onView:galaxyCommandCenter.sidebar"
   ],
   "contributes": {
     "commands": [
       {
         "command": "galaxyCommandCenter.open",
         "title": "Galaxy Command Center: Open Dashboard"
+      },
+      {
+        "command": "galaxyCommandCenter.refresh",
+        "title": "Galaxy Command Center: Refresh Status"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "galaxyCommandCenter",
+          "title": "Galaxy Command Center",
+          "icon": "media/command-center.svg"
+        }
+      ]
+    },
+    "views": {
+      "galaxyCommandCenter": [
+        {
+          "type": "webview",
+          "id": "galaxyCommandCenter.sidebar",
+          "name": "Command Center"
+        }
+      ]
+    }
   },
   "scripts": {
     "package": "vsce package"
