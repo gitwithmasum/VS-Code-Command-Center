@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.6
+
+- Replaced command-based delayed auto-open with a direct dashboard launch during extension activation.
+- Added explicit auto-open success/failure logs to the Extension Host Debug Console.
+- Added `Galaxy Command Center: Diagnose` for runtime diagnostics.
+- Kept the dashboard command, status bar launcher, and Activity Bar launcher as manual fallbacks.
+
 ## 1.1.5
 
 - Dashboard now opens automatically when the Extension Development Host starts.
