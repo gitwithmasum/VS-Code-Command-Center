@@ -30,6 +30,16 @@ The dashboard now includes:
 - Smart project actions that adapt to Node.js, React/Vite, Next.js, Python, and VS Code extension projects
 - Live Git branch, change count, and sync state
 
+## Project Launcher — v1.4
+
+The dashboard can now remember and launch projects:
+
+- Recent projects managed by Command Center
+- Favorite/pinned projects
+- One-click project switching
+- Open Project folder picker
+- Favorite Current Project action
+
 ## Planned modules
 
 - Project Launcher
