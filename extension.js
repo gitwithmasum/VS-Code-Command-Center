@@ -2193,15 +2193,41 @@ async function runAction(command, value, context) {
       }
       return;
     case 'gitAction': {
-      const actionMap = {
+      const vscodeGitCommands = {
+        fetch: 'git.fetch',
+        pull: 'git.pull',
+        push: 'git.push',
+        sync: 'git.sync'
+      };
+
+      const fallbackCommands = {
         fetch: 'git fetch --all --prune',
         pull: 'git pull',
         push: 'git push',
-        sync: 'git pull && git push',
         stageAll: 'git add -A',
         unstageAll: 'git reset'
       };
-      const gitCommand = actionMap[value];
+
+      if (vscodeGitCommands[value]) {
+        const available = await vscode.commands.getCommands(true);
+        const vscodeGitCommand = vscodeGitCommands[value];
+        if (available.includes(vscodeGitCommand)) {
+          await recordCommand(context, `VS Code Git: ${value}`);
+          return vscode.commands.executeCommand(vscodeGitCommand);
+        }
+      }
+
+      if (value === 'sync') {
+        await recordCommand(context, 'git pull → git push');
+        const root = getWorkspaceRoot(context?.extensionUri);
+        if (!root) return;
+        const pulled = runGitLocal(root, ['pull'], '');
+        if (pulled === null) return;
+        runGitLocal(root, ['push'], 'Git sync complete.');
+        return;
+      }
+
+      const gitCommand = fallbackCommands[value];
       if (!gitCommand) return;
       await recordCommand(context, gitCommand);
       const terminal = vscode.window.createTerminal({ name: 'Galaxy Git' });
@@ -2351,7 +2377,8 @@ async function openDashboard(context) {
         message.command === 'manageOrigin' ||
         message.command === 'createBranch' ||
         message.command === 'switchBranch' ||
-        message.command === 'commitChanges'
+        message.command === 'commitChanges' ||
+        message.command === 'gitAction'
       ) {
         await render();
       }
