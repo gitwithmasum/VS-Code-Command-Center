@@ -2,7 +2,7 @@
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
   "description": "A futuristic VS Code developer command center with project launching, Git insights, quick actions, terminal controls, theme switching, workspace health, and productivity tools.",
-  "version": "1.1.8",
+  "version": "1.2.0",
   "publisher": "gitwithmasum",
   "author": {
     "name": "Masum Billah",
@@ -65,7 +65,8 @@
     }
   },
   "scripts": {
-    "package": "vsce package"
+    "package": "vsce package",
+    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-1.2.0.vsix --force"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
