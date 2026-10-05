@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1
+
+- Improved Windows reliability for Fetch, Pull, Push, and Sync by preferring VS Code's built-in Git commands.
+- Added a shell-independent sync fallback that runs pull then push without relying on `&&` syntax.
+- Repository controls now refresh the dashboard state after Git actions.
+
 ## 2.2.0
 
 - Replaced the basic Git panel with a unified Repository Control Hub.
