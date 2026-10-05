@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0
+
+- Added Git Control Center with staged, unstaged, untracked, sync, and last-commit telemetry.
+- Added explicit Pull, Push, Sync, and Stage All controls.
+- Added Command History for terminal and Git commands launched from Command Center.
+- Added Pinned Commands with one-click rerun, pin/unpin, custom command entry, and history clearing.
+
 ## 1.5.0
 
 - Added Advanced Project Health with dependency state, npm script count, and a 0-100 health score.
