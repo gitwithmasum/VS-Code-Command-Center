@@ -11,6 +11,9 @@ let lastEditorContext = {
   selectedText: ''
 };
 
+let lastAiPrompt = '';
+let lastAiPromptKind = '';
+
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
@@ -761,7 +764,9 @@ function getAiHudState() {
   return {
     file: context.fileName ? path.basename(context.fileName) : 'No active editor',
     selectionLength: context.selectedText.length,
-    diagnostics: diagnostics.length
+    diagnostics: diagnostics.length,
+    lastPrompt: lastAiPrompt,
+    lastPromptKind: lastAiPromptKind
   };
 }
 
@@ -817,8 +822,22 @@ async function copyAiPrompt(kind, extensionUri) {
   const prompt = await createAiPrompt(kind, extensionUri);
   if (!prompt) return false;
 
+  lastAiPrompt = prompt;
+  lastAiPromptKind = kind || 'prompt';
+
   await vscode.env.clipboard.writeText(prompt);
-  vscode.window.showInformationMessage('Galaxy AI HUD prompt copied to clipboard.');
+  vscode.window.showInformationMessage('Galaxy AI HUD prompt generated and copied.');
+  return true;
+}
+
+async function copyLastAiPrompt() {
+  if (!lastAiPrompt) {
+    vscode.window.showInformationMessage('Generate an AI HUD prompt first.');
+    return false;
+  }
+
+  await vscode.env.clipboard.writeText(lastAiPrompt);
+  vscode.window.showInformationMessage('Galaxy AI HUD prompt copied again.');
   return true;
 }
 
@@ -1067,6 +1086,9 @@ function getDashboardHtml(state) {
   .ai-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
   .ai-stat strong{font-size:14px}
   .ai-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
+  .ai-preview{margin-top:12px;padding:14px;border:1px solid rgba(255,79,216,.18);border-radius:12px;background:rgba(0,0,0,.22);max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.55;color:var(--text)}
+  .ai-preview-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:14px}
+  .ai-preview-head strong{color:var(--magenta)}
   .hub-list{display:grid;gap:9px}
   .hub-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px;border:1px solid rgba(0,247,255,.11);border-radius:12px;background:rgba(0,247,255,.018)}
   .hub-copy{display:flex;flex-direction:column;min-width:0}
@@ -1259,7 +1281,14 @@ function getDashboardHtml(state) {
         <button data-ai-action="commit"><span>⑂</span>Commit Prompt</button>
         <button data-command="openChat"><span>◫</span>Open Chat</button>
       </div>
-      <p class="muted" style="margin-top:12px;margin-bottom:0">AI HUD prepares real editor/Git context and copies a prompt to your clipboard. It does not send project data anywhere by itself.</p>
+      ${state.ai.lastPrompt ? `
+        <div class="ai-preview-head">
+          <strong>GENERATED PROMPT · ${escapeHtml(state.ai.lastPromptKind || 'prompt').toUpperCase()}</strong>
+          <button data-command="copyLastAiPrompt"><span>⧉</span>Copy Prompt</button>
+        </div>
+        <div class="ai-preview">${escapeHtml(state.ai.lastPrompt)}</div>
+      ` : '<p class="muted" style="margin-top:12px;margin-bottom:0">Generate a prompt to preview it here instantly.</p>'}
+      <p class="muted" style="margin-top:12px;margin-bottom:0">AI HUD prepares context locally. It does not send project data anywhere by itself.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'extensions')}>
@@ -1419,6 +1448,8 @@ async function runAction(command, value, context) {
       return customizeDashboardWidgets(context);
     case 'aiPrompt':
       return copyAiPrompt(value, context?.extensionUri);
+    case 'copyLastAiPrompt':
+      return copyLastAiPrompt();
     case 'openChat':
       return openAvailableChat();
     case 'openGalaxyExtension':
@@ -1589,7 +1620,8 @@ async function openDashboard(context) {
         message.command === 'developerMode' ||
         message.command === 'focusMode' ||
         message.command === 'applyTheme' ||
-        message.command === 'customizeDashboard'
+        message.command === 'customizeDashboard' ||
+        message.command === 'aiPrompt'
       ) {
         await render();
       }
