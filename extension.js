@@ -9,7 +9,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-async function getGitState() {
+async function getGitState(extensionUri) {
   const fallback = { branch: 'No Git repo', changes: 0, sync: 'Offline' };
 
   try {
@@ -21,9 +21,19 @@ async function getGitState() {
     }
 
     const git = gitExtension.exports.getAPI(1);
-    if (!git || !git.repositories.length) return fallback;
+    if (!git) return fallback;
 
-    const repo = git.repositories[0];
+    let repo = git.repositories[0];
+
+    if (!repo && extensionUri) {
+      try {
+        repo = await git.openRepository(extensionUri);
+      } catch (error) {
+        console.error('[Galaxy Command Center] Could not open extension repo directly:', error);
+      }
+    }
+
+    if (!repo) return fallback;
     const head = repo.state.HEAD;
     const branch = head?.name || 'Detached';
     const changes =
@@ -42,12 +52,15 @@ async function getGitState() {
   }
 }
 
-async function getWorkspaceState() {
-  const git = await getGitState();
+async function getWorkspaceState(extensionUri) {
+  const git = await getGitState(extensionUri);
+
+  const workspaceName =
+    vscode.workspace.workspaceFolders?.[0]?.name ||
+    (extensionUri ? extensionUri.path.split('/').filter(Boolean).pop() : 'No workspace open');
 
   return {
-    workspaceName:
-      vscode.workspace.workspaceFolders?.[0]?.name || 'No workspace open',
+    workspaceName,
     ...git
   };
 }
@@ -249,12 +262,16 @@ async function runAction(command) {
 }
 
 class GalaxySidebarProvider {
+  constructor(extensionUri) {
+    this.extensionUri = extensionUri;
+  }
+
   resolveWebviewView(webviewView) {
     this.view = webviewView;
     webviewView.webview.options = { enableScripts: true };
 
     const render = async () => {
-      const state = await getWorkspaceState();
+      const state = await getWorkspaceState(this.extensionUri);
       webviewView.webview.html = `<!DOCTYPE html>
 <html>
 <head>
@@ -317,7 +334,7 @@ async function openDashboard(context) {
     panel.reveal(vscode.ViewColumn.One);
 
     const render = async () => {
-      const state = await getWorkspaceState();
+      const state = await getWorkspaceState(this.extensionUri);
       panel.webview.html = getDashboardHtml(state);
     };
 
@@ -355,7 +372,7 @@ async function activate(context) {
     }
   }
 
-  const sidebarProvider = new GalaxySidebarProvider();
+  const sidebarProvider = new GalaxySidebarProvider(context.extensionUri);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
