@@ -40,6 +40,13 @@ The dashboard can now remember and launch projects:
 - Open Project folder picker
 - Favorite Current Project action
 
+## Advanced Workspace Intelligence — v1.5
+
+- Health score from diagnostics, warnings, TODO/FIXME, and dependency state
+- Node.js, npm, Python, Git, and VS Code environment status
+- Dev server monitor for common localhost ports
+- One-click Open Browser for detected local servers
+
 ## Planned modules
 
 - Project Launcher
