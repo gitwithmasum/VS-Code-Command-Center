@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.7
+
+- Replaced VS Code Git API telemetry with direct Git CLI telemetry for local development reliability.
+- Workspace name now falls back to the actual extension folder name using `context.extensionPath`.
+- Branch, change count, and upstream sync status are now read directly from the repository path.
+- Dashboard telemetry no longer depends on an open VS Code workspace.
+
 ## 1.1.6
 
 - Replaced command-based delayed auto-open with a direct dashboard launch during extension activation.
