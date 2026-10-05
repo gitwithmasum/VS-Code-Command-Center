@@ -567,7 +567,7 @@ async function getGitHubCollaborationState(gitState, force = false) {
       fullName: parsed.fullName,
       issues: (Array.isArray(issuesRaw) ? issuesRaw : []).filter((item) => !item.pull_request).slice(0, 5).map((item) => ({ number: item.number, title: item.title || '', url: item.html_url || '' })),
       pulls: (Array.isArray(pullsRaw) ? pullsRaw : []).slice(0, 5).map((item) => ({ number: item.number, title: item.title || '', url: item.html_url || '', draft: Boolean(item.draft) })),
-      actions: ((runsRaw && runsRaw.workflow_runs) || []).slice(0, 5).map((run) => ({ name: run.name || run.display_title || 'Workflow', status: run.conclusion || run.status || 'unknown', branch: run.head_branch || '', url: run.html_url || '' })),
+      actions: ((runsRaw && runsRaw.workflow_runs) || []).slice(0, 5).map((run) => ({ id: String(run.id || ''), name: run.name || run.display_title || 'Workflow', status: run.conclusion || run.status || 'unknown', branch: run.head_branch || '', url: run.html_url || '' })),
       error: ''
     };
     githubCollaborationCache = { key: cacheKey, at: Date.now(), value };
@@ -581,7 +581,12 @@ function renderGitHubCollaboration(state) {
   if (state.error && !state.available) return '<p class="muted">' + escapeHtml(state.error) + '</p>';
   const issues = state.issues.length ? state.issues.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>#' + item.number + '</span><strong>' + escapeHtml(item.title) + '</strong></button>').join('') : '<p class="muted">No open issues.</p>';
   const pulls = state.pulls.length ? state.pulls.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>PR #' + item.number + '</span><strong>' + escapeHtml(item.title) + (item.draft ? ' · Draft' : '') + '</strong></button>').join('') : '<p class="muted">No open pull requests.</p>';
-  const actions = state.actions.length ? state.actions.map((item) => '<button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>' + escapeHtml(item.status) + '</span><strong>' + escapeHtml(item.name) + (item.branch ? ' · ' + escapeHtml(item.branch) : '') + '</strong></button>').join('') : '<p class="muted">No recent workflow runs.</p>';
+  const actions = state.actions.length ? state.actions.map((item) =>
+    '<div class="action-run-row"><button class="collab-row" data-external-url="' + escapeHtml(item.url) + '"><span>' +
+    escapeHtml(item.status) + '</span><strong>' + escapeHtml(item.name) +
+    (item.branch ? ' · ' + escapeHtml(item.branch) : '') +
+    '</strong></button><button data-rerun-action="' + escapeHtml(item.id) + '">Rerun</button></div>'
+  ).join('') : '<p class="muted">No recent workflow runs.</p>';
   return '<div class="collab-columns"><div class="collab-group"><div class="project-group-title">OPEN ISSUES</div>' + issues + '</div><div class="collab-group"><div class="project-group-title">PULL REQUESTS</div>' + pulls + '</div><div class="collab-group"><div class="project-group-title">ACTIONS</div>' + actions + '</div></div>';
 }
 
@@ -916,6 +921,152 @@ async function deleteMergedBranch(extensionUri, branchName) {
   if (confirm !== 'Delete Branch') return false;
 
   return runGitLocal(root, ['branch', '-d', branchName], 'Merged branch deleted.') !== null;
+}
+
+
+async function createDraftGitHubRelease(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const parsed = parseGitHubRemote(root ? runGit(root, ['remote', 'get-url', 'origin']) : '');
+  if (!parsed) {
+    vscode.window.showWarningMessage('Current workspace is not linked to a GitHub repository.');
+    return false;
+  }
+
+  const session = await getGitHubSession(true);
+  if (!session) return false;
+
+  const tags = runGit(root, ['tag', '--sort=-creatordate'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  let tag = await vscode.window.showQuickPick(tags, {
+    title: 'Create Draft GitHub Release',
+    placeHolder: 'Choose an existing tag'
+  });
+
+  if (!tag) {
+    tag = await vscode.window.showInputBox({
+      title: 'Release Tag',
+      prompt: 'Enter an existing tag name'
+    });
+  }
+  if (!tag?.trim()) return false;
+
+  const name = await vscode.window.showInputBox({
+    title: 'Release Name',
+    value: tag.trim()
+  });
+  if (name === undefined) return false;
+
+  try {
+    const created = await githubApiRequest(
+      '/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo) + '/releases',
+      session.accessToken,
+      'POST',
+      {
+        tag_name: tag.trim(),
+        name: (name || tag).trim(),
+        draft: true,
+        prerelease: false,
+        generate_release_notes: true
+      }
+    );
+
+    vscode.window.showInformationMessage('Draft GitHub release created.');
+    if (created?.html_url) {
+      await vscode.env.openExternal(vscode.Uri.parse(created.html_url));
+    }
+    return true;
+  } catch (error) {
+    vscode.window.showErrorMessage(error.message || 'Unable to create draft release.');
+    return false;
+  }
+}
+
+async function rerunGitHubAction(extensionUri, runId) {
+  if (!runId) return false;
+  const root = getWorkspaceRoot(extensionUri);
+  const parsed = parseGitHubRemote(root ? runGit(root, ['remote', 'get-url', 'origin']) : '');
+  if (!parsed) return false;
+
+  const session = await getGitHubSession(true);
+  if (!session) return false;
+
+  try {
+    await githubApiRequest(
+      '/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo) + '/actions/runs/' + encodeURIComponent(runId) + '/rerun',
+      session.accessToken,
+      'POST'
+    );
+    githubCollaborationCache = { key: '', at: 0, value: null };
+    vscode.window.showInformationMessage('GitHub Actions run queued again.');
+    return true;
+  } catch (error) {
+    vscode.window.showErrorMessage(error.message || 'Unable to rerun GitHub Actions workflow.');
+    return false;
+  }
+}
+
+async function openPullRequestReviewCenter(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const origin = root ? runGit(root, ['remote', 'get-url', 'origin']) : '';
+  const parsed = parseGitHubRemote(origin);
+  if (!parsed) {
+    vscode.window.showWarningMessage('Current workspace is not linked to GitHub.');
+    return false;
+  }
+
+  const commands = await vscode.commands.getCommands(true);
+  const candidates = [
+    'githubPullRequests.focus',
+    'pr.openAll'
+  ];
+  const command = candidates.find((item) => commands.includes(item));
+  if (command) {
+    await vscode.commands.executeCommand(command);
+    return true;
+  }
+
+  await vscode.env.openExternal(vscode.Uri.parse(parsed.webUrl + '/pulls'));
+  return true;
+}
+
+async function safeCommitAndPush(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const conflicts = runGit(root, ['diff', '--name-only', '--diff-filter=U']);
+  if (conflicts) {
+    vscode.window.showWarningMessage('Resolve merge conflicts before Commit & Push.');
+    return false;
+  }
+
+  const staged = runGit(root, ['diff', '--cached', '--name-only']);
+  if (!staged) {
+    vscode.window.showWarningMessage('Stage the changes you want to commit first.');
+    return false;
+  }
+
+  const message = await vscode.window.showInputBox({
+    title: 'Safe Commit & Push',
+    prompt: 'Commit message',
+    placeHolder: 'feat: describe your changes'
+  });
+  if (!message?.trim()) return false;
+
+  if (runGitLocal(root, ['commit', '-m', message.trim()], 'Commit created.') === null) {
+    return false;
+  }
+
+  const branch = runGit(root, ['branch', '--show-current']);
+  const confirm = await vscode.window.showInformationMessage(
+    'Push commit on "' + (branch || 'current branch') + '" to origin?',
+    { modal: true },
+    'Push'
+  );
+  if (confirm !== 'Push') return true;
+
+  return runGitLocal(root, ['push'], 'Commit pushed to origin.') !== null;
 }
 
 function renderChangedFiles(items) {
