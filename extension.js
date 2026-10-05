@@ -4,6 +4,47 @@ const fs = require('fs');
 const net = require('net');
 const { execFileSync } = require('child_process');
 
+let lastEditorContext = {
+  fileName: '',
+  languageId: '',
+  uri: '',
+  selectedText: ''
+};
+
+function captureEditorContext(editor, clearEmptySelection = true) {
+  if (!editor) return;
+
+  lastEditorContext.fileName = editor.document.fileName || '';
+  lastEditorContext.languageId = editor.document.languageId || '';
+  lastEditorContext.uri = editor.document.uri.toString();
+
+  if (!editor.selection.isEmpty) {
+    lastEditorContext.selectedText = editor.document.getText(editor.selection);
+  } else if (clearEmptySelection) {
+    lastEditorContext.selectedText = '';
+  }
+}
+
+function getBestEditorContext() {
+  const editor = vscode.window.activeTextEditor;
+  if (editor) {
+    captureEditorContext(editor, false);
+  }
+
+  const activeSelection =
+    editor && !editor.selection.isEmpty
+      ? editor.document.getText(editor.selection)
+      : '';
+
+  return {
+    editor,
+    fileName: editor?.document.fileName || lastEditorContext.fileName,
+    languageId: editor?.document.languageId || lastEditorContext.languageId,
+    uri: editor?.document.uri.toString() || lastEditorContext.uri,
+    selectedText: activeSelection || lastEditorContext.selectedText
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -712,15 +753,14 @@ function renderGalaxyExtensions(extensions) {
 }
 
 function getAiHudState() {
-  const editor = vscode.window.activeTextEditor;
-  const selectedText = editor && !editor.selection.isEmpty
-    ? editor.document.getText(editor.selection)
-    : '';
-  const diagnostics = editor ? vscode.languages.getDiagnostics(editor.document.uri) : [];
+  const context = getBestEditorContext();
+  const diagnostics = context.uri
+    ? vscode.languages.getDiagnostics(vscode.Uri.parse(context.uri))
+    : [];
 
   return {
-    file: editor ? path.basename(editor.document.fileName) : 'No active editor',
-    selectionLength: selectedText.length,
+    file: context.fileName ? path.basename(context.fileName) : 'No active editor',
+    selectionLength: context.selectedText.length,
     diagnostics: diagnostics.length
   };
 }
@@ -731,32 +771,33 @@ function truncatePromptText(value, limit = 12000) {
 }
 
 async function createAiPrompt(kind, extensionUri) {
-  const editor = vscode.window.activeTextEditor;
+  const editorContext = getBestEditorContext();
   const root = getWorkspaceRoot(extensionUri);
 
   if (kind === 'selection') {
-    if (!editor || editor.selection.isEmpty) {
+    if (!editorContext.selectedText) {
       vscode.window.showWarningMessage('Select some code first, then use Explain Selection.');
       return '';
     }
 
-    const selected = truncatePromptText(editor.document.getText(editor.selection));
-    const language = editor.document.languageId;
+    const selected = truncatePromptText(editorContext.selectedText);
+    const language = editorContext.languageId || 'code';
     return `Explain this ${language} code clearly. Identify what it does, important logic, possible bugs, and practical improvements.\n\n${selected}`;
   }
 
   if (kind === 'diagnostics') {
-    if (!editor) {
+    if (!editorContext.uri) {
       vscode.window.showWarningMessage('Open a file first, then use Diagnose Current File.');
       return '';
     }
 
-    const diagnostics = vscode.languages.getDiagnostics(editor.document.uri).slice(0, 25);
+    const uri = vscode.Uri.parse(editorContext.uri);
+    const diagnostics = vscode.languages.getDiagnostics(uri).slice(0, 25);
     const details = diagnostics.length
       ? diagnostics.map((item) => `Line ${item.range.start.line + 1}: ${item.message}`).join('\n')
       : 'VS Code currently reports no diagnostics for this file.';
 
-    return `Review the current file diagnostics and suggest precise fixes. File: ${path.basename(editor.document.fileName)}\nLanguage: ${editor.document.languageId}\n\nDiagnostics:\n${details}`;
+    return `Review the current file diagnostics and suggest precise fixes. File: ${path.basename(editorContext.fileName || uri.fsPath)}\nLanguage: ${editorContext.languageId || 'unknown'}\n\nDiagnostics:\n${details}`;
   }
 
   if (kind === 'commit') {
@@ -1512,6 +1553,8 @@ function send(command){vscode.postMessage({command});}
 
 async function openDashboard(context) {
   try {
+    captureEditorContext(vscode.window.activeTextEditor, false);
+
     const panel = vscode.window.createWebviewPanel(
       'galaxyCommandCenter',
       'Masum Galaxy // Command Center',
@@ -1565,6 +1608,20 @@ async function openDashboard(context) {
 
 async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
+  captureEditorContext(vscode.window.activeTextEditor, true);
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      captureEditorContext(event.textEditor, true);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      captureEditorContext(editor, true);
+    })
+  );
+
   await rememberCurrentProject(context);
 
   context.subscriptions.push(
