@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+- Added Advanced Project Health with dependency state, npm script count, and a 0-100 health score.
+- Added Environment Status for Node.js, npm, Python, Git, and VS Code versions.
+- Added Dev Server Monitor that scans common local development ports and can open detected servers in the browser.
+- Fixed dashboard Project Launcher context handling so favorite actions refresh correctly.
+
 ## 1.4.0
 
 - Added Project Launcher with Command Center-managed recent projects.
