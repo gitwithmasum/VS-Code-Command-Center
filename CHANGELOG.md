@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- Added Smart Workspace project-type detection for VS Code extensions, React/Vite, Next.js, Node.js, Python, and general workspaces.
+- Added Project Health with live VS Code diagnostics, warnings, and TODO/FIXME counts.
+- Added Recent Files based on workspace file modification time with one-click opening.
+- Added context-aware Smart Project Actions such as npm install, dev, build, test, VSIX packaging, Python run, and interpreter selection.
+- Upgraded the futuristic dashboard and sidebar to surface real project intelligence.
+
 ## 1.2.1
 
 - Fixed Git telemetry in normal installed VS Code sessions.
