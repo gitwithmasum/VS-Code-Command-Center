@@ -22,7 +22,12 @@ const {
   setProblemStatus,
   resetCpSession,
   runCurrentFile,
+  runMultipleCases,
+  runStressTest,
   saveLastRun,
+  saveLastSuite,
+  saveStressResult,
+  getCpTemplate,
   getCpSnippets
 } = require('./src/features/cp');
 
@@ -2381,6 +2386,232 @@ async function runCpSampleAction(context, value) {
   return true;
 }
 
+
+async function runCpMultiCaseAction(context, value) {
+  const document = await getCpSourceDocument();
+  if (!document || document.uri.scheme !== 'file') {
+    vscode.window.showInformationMessage('Open a C/C++, Python, or JavaScript source file first.');
+    return false;
+  }
+
+  if (document.isDirty && !(await document.save())) {
+    vscode.window.showWarningMessage('Save the source file before running CP cases.');
+    return false;
+  }
+
+  const rawInputs = String(value?.input || '').slice(0, 50000);
+  const rawExpected = String(value?.expected || '').slice(0, 50000);
+  const suite = await runMultipleCases(document, rawInputs, rawExpected);
+
+  if (!suite.ok) {
+    vscode.window.showWarningMessage('Galaxy CP Multi Judge: ' + (suite.error || 'Unable to run cases.'));
+    return false;
+  }
+
+  await saveLastSuite(context, suite);
+
+  if (suite.verdict === 'PASS') {
+    vscode.window.showInformationMessage(
+      'Galaxy CP: all ' + suite.total + ' cases passed.'
+    );
+  } else {
+    vscode.window.showWarningMessage(
+      'Galaxy CP: ' + suite.verdict + ' after ' + suite.passed + '/' + suite.total + ' passed.'
+    );
+  }
+  return true;
+}
+
+async function createCpProblemFile(context) {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const language = await vscode.window.showQuickPick(
+    [
+      { label: 'C++17', value: 'cpp' },
+      { label: 'Python 3', value: 'python' },
+      { label: 'JavaScript (Node)', value: 'javascript' }
+    ],
+    {
+      title: 'Galaxy CP · New Problem File',
+      placeHolder: 'Choose a language'
+    }
+  );
+  if (!language) return false;
+
+  const state = getCpArenaState(context);
+  const label = await vscode.window.showInputBox({
+    title: 'Problem Label',
+    prompt: 'Problem label or short name',
+    value: state.currentProblem || 'A',
+    validateInput: (input) =>
+      /^[A-Za-z0-9_-]{1,24}$/.test(String(input || ''))
+        ? undefined
+        : 'Use 1–24 letters, numbers, underscores, or hyphens.'
+  });
+  if (!label) return false;
+
+  const template = getCpTemplate(language.value, label);
+  const target = await vscode.window.showSaveDialog({
+    title: 'Create CP Problem File',
+    defaultUri: vscode.Uri.file(
+      path.join(root, label.toLowerCase() + '.' + template.extension)
+    ),
+    saveLabel: 'Create Problem File',
+    filters: {
+      'Source File': [template.extension]
+    }
+  });
+  if (!target) return false;
+
+  if (fs.existsSync(target.fsPath)) {
+    vscode.window.showWarningMessage('That file already exists. Choose a new filename.');
+    return false;
+  }
+
+  await vscode.workspace.fs.writeFile(
+    target,
+    Buffer.from(template.content, 'utf8')
+  );
+  const document = await vscode.workspace.openTextDocument(target);
+  await vscode.window.showTextDocument(document, { preview: false });
+  vscode.window.showInformationMessage('Galaxy CP problem file created.');
+  return true;
+}
+
+async function pickCpSourceFile(title, exclude = []) {
+  const files = await vscode.workspace.findFiles(
+    '**/*.{cpp,c,py,js}',
+    '**/{node_modules,.git,dist,build,out,.next,coverage}/**',
+    200
+  );
+
+  const excluded = new Set(exclude.map((value) => String(value || '').toLowerCase()));
+  const items = files
+    .filter((uri) => !excluded.has(uri.fsPath.toLowerCase()))
+    .map((uri) => ({
+      label: vscode.workspace.asRelativePath(uri, false),
+      description: uri.fsPath,
+      uri
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  const selected = await vscode.window.showQuickPick(items, {
+    title,
+    placeHolder: 'Choose a source file'
+  });
+  return selected?.uri || null;
+}
+
+async function runCpStressAction(context) {
+  const optimized = await getCpSourceDocument();
+  if (!optimized || optimized.uri.scheme !== 'file') {
+    vscode.window.showInformationMessage(
+      'Open your optimized solution first. Galaxy CP uses the current/last active source file as Optimized.'
+    );
+    return false;
+  }
+
+  if (optimized.isDirty && !(await optimized.save())) {
+    vscode.window.showWarningMessage('Save the optimized solution before stress testing.');
+    return false;
+  }
+
+  const generatorUri = await pickCpSourceFile(
+    'Galaxy CP Stress · Select Generator',
+    [optimized.uri.fsPath]
+  );
+  if (!generatorUri) return false;
+
+  const bruteUri = await pickCpSourceFile(
+    'Galaxy CP Stress · Select Brute Solution',
+    [optimized.uri.fsPath, generatorUri.fsPath]
+  );
+  if (!bruteUri) return false;
+
+  const iterationsRaw = await vscode.window.showInputBox({
+    title: 'Galaxy CP Stress Test',
+    prompt: 'Number of random tests',
+    value: '20',
+    validateInput: (input) => {
+      const count = Number(input);
+      if (!Number.isInteger(count) || count < 1 || count > 100) {
+        return 'Enter an integer between 1 and 100.';
+      }
+      return undefined;
+    }
+  });
+  if (iterationsRaw === undefined) return false;
+
+  const generator = await vscode.workspace.openTextDocument(generatorUri);
+  const brute = await vscode.workspace.openTextDocument(bruteUri);
+  if (generator.isDirty) await generator.save();
+  if (brute.isDirty) await brute.save();
+
+  vscode.window.setStatusBarMessage('Galaxy CP · Stress test running…', 3000);
+  const result = await runStressTest(
+    generator,
+    brute,
+    optimized,
+    Number(iterationsRaw)
+  );
+
+  await saveStressResult(context, result);
+
+  if (!result.ok) {
+    vscode.window.showWarningMessage(
+      'Galaxy CP Stress failed at ' + (result.stage || 'unknown stage') +
+      (result.iteration ? ' · iteration ' + result.iteration : '') + '.'
+    );
+    return false;
+  }
+
+  if (result.verdict === 'MISMATCH') {
+    vscode.window.showWarningMessage(
+      'Galaxy CP found a mismatch at iteration ' + result.iteration + '.'
+    );
+  } else {
+    vscode.window.showInformationMessage(
+      'Galaxy CP stress test passed ' + result.iterations + ' iteration(s).'
+    );
+  }
+  return true;
+}
+
+function renderCpHistory(history) {
+  if (!history?.length) {
+    return '<p class="muted">No CP verdict history yet.</p>';
+  }
+
+  return history.slice(0, 10).map((item) => {
+    const when = item.at ? new Date(item.at).toLocaleTimeString() : '';
+    const detail =
+      item.type === 'suite'
+        ? (Number(item.passed || 0) + '/' + Number(item.total || 0) + ' cases')
+        : item.type === 'stress'
+          ? ('iteration ' + Number(item.iteration || 0))
+          : (Number(item.runtimeMs || 0) + ' ms');
+
+    return '<div class="history-row"><div><strong>Problem ' +
+      escapeHtml(item.problem || '?') + ' · ' + escapeHtml(item.verdict || item.type || 'RUN') +
+      '</strong><small>' + escapeHtml(item.type || 'sample') + ' · ' +
+      escapeHtml(when) + '</small></div><span>' + escapeHtml(detail) + '</span></div>';
+  }).join('');
+}
+
+function renderCpSuite(suite) {
+  if (!suite?.cases?.length) return '';
+  return suite.cases.map((item) =>
+    '<div class="history-row"><div><strong>Case ' + item.index + ' · ' +
+    escapeHtml(item.verdict) + '</strong><small>' +
+    Number(item.runtimeMs || 0) + ' ms</small></div><span>' +
+    (item.verdict === 'PASS' ? '✓' : '×') + '</span></div>'
+  ).join('');
+}
+
 async function openCpSnippetVault() {
   const editor = await getCpEditableEditor();
   if (!editor) {
@@ -4551,7 +4782,7 @@ function renderCpProblems(problems) {
   return (problems || []).map((item) => {
     const statusClass =
       item.status === 'AC' ? 'cp-ac' :
-      ['WA', 'TLE', 'RE'].includes(item.status) ? 'cp-fail' :
+      ['WA', 'TLE', 'RE', 'CE'].includes(item.status) ? 'cp-fail' :
       item.status === 'SOLVING' ? 'cp-solving' : '';
 
     return '<button class="cp-problem ' + statusClass + (item.current ? ' active' : '') +
@@ -5250,8 +5481,12 @@ function getDashboardHtml(state) {
           <textarea id="cpSampleExpected" spellcheck="false" placeholder="Paste expected output here...">${escapeHtml(state.cpArena.lastRun?.expected || '')}</textarea>
         </div>
       </div>
+      <p class="muted" style="margin:8px 0 0">Multi-case format: separate each input case and each expected-output case with a line containing <code>---</code>.</p>
       <div class="cp-tools">
-        <button data-cp-run-sample="1"><span>▶</span>Compile / Run Sample</button>
+        <button data-cp-run-sample="1"><span>▶</span>Run Sample</button>
+        <button data-cp-run-multi="1"><span>≋</span>Run Multi Cases</button>
+        <button data-command="cpStressTest"><span>⚡</span>Stress Test</button>
+        <button data-command="cpNewProblemFile"><span>＋</span>New Problem File</button>
         <button data-command="cpSnippetVault"><span>⌘</span>Snippet Vault</button>
         <button data-command="cpAiComplexity"><span>O()</span>Complexity</button>
         <button data-command="cpAiEdgeCases"><span>◇</span>Edge Cases</button>
@@ -5269,6 +5504,28 @@ function getDashboardHtml(state) {
             escapeHtml(state.cpArena.lastRun.stderr) + '</div>'
           : '') +
         '</div>' : ''}
+
+      ${state.cpArena.lastSuite?.cases?.length
+        ? '<div class="project-group-title" style="margin-top:14px">LAST MULTI-CASE RUN</div><div class="history-panel">' +
+          renderCpSuite(state.cpArena.lastSuite) + '</div>'
+        : ''}
+
+      ${state.cpArena.lastStress
+        ? '<div class="project-group-title" style="margin-top:14px">LAST STRESS TEST</div><div class="cp-result">' +
+          '<div class="commit-line"><strong>' + escapeHtml(state.cpArena.lastStress.verdict || (state.cpArena.lastStress.ok ? 'PASS' : 'FAILED')) +
+          '</strong>' +
+          (state.cpArena.lastStress.iteration ? ' · iteration ' + Number(state.cpArena.lastStress.iteration) : '') +
+          (state.cpArena.lastStress.iterations ? ' · ' + Number(state.cpArena.lastStress.iterations) + ' iterations' : '') +
+          '</div>' +
+          (state.cpArena.lastStress.input ? '<div class="project-group-title" style="margin-top:10px">FAILING INPUT</div><div class="cp-output">' + escapeHtml(state.cpArena.lastStress.input) + '</div>' : '') +
+          (state.cpArena.lastStress.bruteOutput ? '<div class="project-group-title" style="margin-top:10px">BRUTE OUTPUT</div><div class="cp-output">' + escapeHtml(state.cpArena.lastStress.bruteOutput) + '</div>' : '') +
+          (state.cpArena.lastStress.optimizedOutput ? '<div class="project-group-title" style="margin-top:10px">OPTIMIZED OUTPUT</div><div class="cp-output">' + escapeHtml(state.cpArena.lastStress.optimizedOutput) + '</div>' : '') +
+          (state.cpArena.lastStress.error ? '<div class="cp-output">' + escapeHtml(state.cpArena.lastStress.error) + '</div>' : '') +
+          '</div>'
+        : ''}
+
+      <div class="project-group-title" style="margin-top:14px">VERDICT HISTORY</div>
+      <div class="history-panel">${renderCpHistory(state.cpArena.history)}</div>
 
       <div class="project-group-title" style="margin-top:14px">CP AI COACH</div>
       ${state.cpAi.running
@@ -5900,6 +6157,17 @@ function getDashboardHtml(state) {
     });
   });
 
+  document.querySelectorAll('[data-cp-run-multi]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById('cpSampleInput')?.value || '';
+      const expected = document.getElementById('cpSampleExpected')?.value || '';
+      vscode.postMessage({
+        command: 'cpRunMulti',
+        value: { input, expected }
+      });
+    });
+  });
+
   const cpFormatClock = (milliseconds) => {
     const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -6109,6 +6377,12 @@ async function runAction(command, value, context) {
       return setProblemStatus(context, value);
     case 'cpRunSample':
       return runCpSampleAction(context, value);
+    case 'cpRunMulti':
+      return runCpMultiCaseAction(context, value);
+    case 'cpStressTest':
+      return runCpStressAction(context);
+    case 'cpNewProblemFile':
+      return createCpProblemFile(context);
     case 'cpSnippetVault':
       return openCpSnippetVault();
     case 'cpAiComplexity':
@@ -6406,6 +6680,9 @@ async function openDashboard(context) {
         message.command === 'cpSwitchProblem' ||
         message.command === 'cpSetStatus' ||
         message.command === 'cpRunSample' ||
+        message.command === 'cpRunMulti' ||
+        message.command === 'cpStressTest' ||
+        message.command === 'cpNewProblemFile' ||
         message.command === 'cpAiComplexity' ||
         message.command === 'cpAiEdgeCases' ||
         message.command === 'cpPanicAssist'
