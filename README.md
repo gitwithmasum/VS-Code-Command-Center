@@ -117,6 +117,17 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Copy Smart Developer Assistant analysis/output
 - Explicit, user-triggered context sharing for clipboard, conflict, and staged-diff reviews
 
+## AI Fix Studio — v2.7
+
+- Generate a minimal AI fix for the highest-priority current diagnostic
+- Refactor an explicit editor selection without auto-writing the file
+- Generate a new test file proposal using the detected project test framework
+- Review every proposal in VS Code's diff editor before applying
+- Explicit confirmation before applying AI changes
+- Stale-source protection blocks Apply if the source file changed after generation
+- Generated tests never overwrite an existing file
+- AI edits remain proposals until the user chooses Apply
+
 ## Planned modules
 
 - Project Launcher
