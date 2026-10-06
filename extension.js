@@ -3181,18 +3181,24 @@ async function reviewAiEditProposal() {
   return true;
 }
 
-async function applyAiEditProposal() {
+async function applyAiEditProposal(context, extensionUri) {
   if (!aiEditState.proposalId || !aiEditState.proposedText) {
     vscode.window.showInformationMessage('No AI edit proposal is ready.');
     return false;
   }
 
-  const confirm = await vscode.window.showWarningMessage(
+  const beforeErrors = collectDebugDiagnostics()
+    .filter((item) => item.severity === 'Error').length;
+
+  const choice = await vscode.window.showWarningMessage(
     'Apply this reviewed Galaxy AI proposal?',
     { modal: true },
-    'Apply'
+    'Apply & Verify',
+    'Apply Only'
   );
-  if (confirm !== 'Apply') return false;
+  if (!choice) return false;
+
+  const shouldVerify = choice === 'Apply & Verify';
 
   if (aiEditState.kind === 'generate-tests') {
     if (fs.existsSync(aiEditState.targetPath)) {
@@ -3207,11 +3213,24 @@ async function applyAiEditProposal() {
       Buffer.from(aiEditState.proposedText, 'utf8')
     );
 
+    lastAiApplyBackup = {
+      kind: 'created-file',
+      targetPath: aiEditState.targetPath,
+      appliedText: aiEditState.proposedText,
+      saved: true,
+      appliedAt: Date.now()
+    };
+
     const document = await vscode.workspace.openTextDocument(targetUri);
     await vscode.window.showTextDocument(document, { preview: false });
     vscode.window.showInformationMessage('Galaxy AI test file created.');
+
     clearAiEditProposal();
     if (dashboardRenderCallback) await dashboardRenderCallback();
+
+    if (shouldVerify) {
+      return runQualityGate(context, extensionUri, { beforeErrors });
+    }
     return true;
   }
 
@@ -3226,12 +3245,15 @@ async function applyAiEditProposal() {
     return false;
   }
 
+  const originalText = document.getText();
+  const proposedText = aiEditState.proposedText;
+
   const edit = new vscode.WorkspaceEdit();
   const fullRange = new vscode.Range(
     new vscode.Position(0, 0),
-    document.positionAt(document.getText().length)
+    document.positionAt(originalText.length)
   );
-  edit.replace(uri, fullRange, aiEditState.proposedText);
+  edit.replace(uri, fullRange, proposedText);
 
   const applied = await vscode.workspace.applyEdit(edit);
   if (!applied) {
@@ -3239,10 +3261,38 @@ async function applyAiEditProposal() {
     return false;
   }
 
+  let saved = false;
+  if (shouldVerify) {
+    saved = await document.save();
+    if (!saved) {
+      vscode.window.showWarningMessage(
+        'AI proposal was applied, but the file could not be saved. Full verification was skipped.'
+      );
+    }
+  }
+
+  lastAiApplyBackup = {
+    kind: 'edited-file',
+    sourceUri: uri.toString(),
+    originalText,
+    appliedText: proposedText,
+    saved,
+    appliedAt: Date.now()
+  };
+
   await vscode.window.showTextDocument(document, { preview: false });
-  vscode.window.showInformationMessage('Galaxy AI proposal applied as unsaved editor changes.');
+  vscode.window.showInformationMessage(
+    shouldVerify && saved
+      ? 'Galaxy AI proposal applied and saved. Verification is starting.'
+      : 'Galaxy AI proposal applied as editor changes.'
+  );
+
   clearAiEditProposal();
   if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  if (shouldVerify && saved) {
+    return runQualityGate(context, extensionUri, { beforeErrors });
+  }
   return true;
 }
 
@@ -5372,7 +5422,7 @@ async function runAction(command, value, context) {
     case 'reviewAiEditProposal':
       return reviewAiEditProposal();
     case 'applyAiEditProposal':
-      return applyAiEditProposal();
+      return applyAiEditProposal(context, context?.extensionUri);
     case 'discardAiEditProposal':
       return discardAiEditProposal();
     case 'cloneRepository':
