@@ -2186,6 +2186,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'smartActions', label: 'Smart Project Actions' },
   { id: 'smartDeveloper', label: 'Smart Developer Assistant' },
   { id: 'aiFix', label: 'AI Fix Studio' },
+  { id: 'quality', label: 'Quality Gate + Auto Verify' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
   { id: 'modes', label: 'Developer Modes' },
@@ -4229,6 +4230,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     advancedRepo: getAdvancedRepoState(extensionUri),
     smartAssistant: getSmartAssistantState(extensionUri),
     aiEdit: getAiEditState(),
+    qualityGate: getQualityGateState(context, extensionUri),
     recentFiles,
     ai: getAiHudState(),
     debugAssistant: context ? getDebugAssistantState(context) : null,
@@ -4403,6 +4405,25 @@ function getDashboardHtml(state) {
   .ai-fix-summary{padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018);line-height:1.55}
   .ai-fix-verify{margin:10px 0 0;padding-left:18px;color:var(--muted)}
   .ai-fix-verify li{margin:5px 0}
+  .quality-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .quality-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .quality-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .quality-box{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .quality-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .quality-box strong{font-size:16px}
+  .quality-status-ready{color:#64ffb4}
+  .quality-status-review{color:#ffcc66}
+  .quality-status-blocked{color:#ff6b8a}
+  .quality-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .quality-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .quality-checks{display:grid;gap:7px}
+  .quality-check{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid rgba(0,247,255,.08);border-radius:9px}
+  .quality-check.pass span{color:#64ffb4}
+  .quality-check.fail span{color:#ff6b8a}
+  .quality-check small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .coverage-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .coverage-grid div{padding:9px;border:1px solid rgba(0,247,255,.08);border-radius:9px}
+  .coverage-grid span{display:block;color:var(--muted);font-size:9px;margin-bottom:4px}
   .git-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
   .git-box{padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
   .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
@@ -4517,7 +4538,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -4691,6 +4712,74 @@ function getDashboardHtml(state) {
         : ''}
 
       <p class="muted" style="margin:12px 0 0">Apply is blocked if the source file changed after the proposal was created. Generated tests refuse to overwrite an existing file.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'quality')}>
+      <div class="quality-head">
+        <div>
+          <div class="label">QUALITY GATE + AUTO VERIFY</div>
+          <h3 style="margin-bottom:4px">
+            <span class="${state.qualityGate.status === 'READY' ? 'quality-status-ready' : (state.qualityGate.status === 'REVIEW' ? 'quality-status-review' : 'quality-status-blocked')}">
+              ${escapeHtml(state.qualityGate.status)}
+            </span>
+            · ${state.qualityGate.score}/100
+          </h3>
+          <div class="muted">${escapeHtml(state.qualityGate.message || 'Run the gate to verify diagnostics, scripts, conflicts, coverage, and dependency risk.')}</div>
+        </div>
+        <div class="quality-actions">
+          <button data-command="runQualityGate"><span>✓</span>Run Quality Gate</button>
+          <button data-command="scanDependencies"><span>⌁</span>Scan Dependencies</button>
+          <button data-command="smartCommitGate"><span>⑂</span>Smart Commit</button>
+          ${state.qualityGate.canRollback ? '<button data-command="revertLastAiApply"><span>↶</span>Revert Last AI Apply</button>' : ''}
+        </div>
+      </div>
+
+      <div class="quality-summary">
+        <div class="quality-box"><span>ERRORS</span><strong>${state.qualityGate.errors}</strong></div>
+        <div class="quality-box"><span>WARNINGS</span><strong>${state.qualityGate.warnings}</strong></div>
+        <div class="quality-box"><span>CONFLICTS</span><strong>${state.qualityGate.conflicts}</strong></div>
+        <div class="quality-box"><span>BEFORE → AFTER</span><strong>${state.qualityGate.beforeErrors === null ? '—' : state.qualityGate.beforeErrors} → ${state.qualityGate.afterErrors === null ? '—' : state.qualityGate.afterErrors}</strong></div>
+        <div class="quality-box"><span>LAST RUN</span><strong>${state.qualityGate.lastRunAt ? escapeHtml(new Date(state.qualityGate.lastRunAt).toLocaleTimeString()) : 'Never'}</strong></div>
+      </div>
+
+      <div class="quality-grid">
+        <div class="quality-panel">
+          <div class="project-group-title">VERIFICATION CHECKS</div>
+          <div class="quality-checks">${renderQualityChecks(state.qualityGate.checks)}</div>
+        </div>
+
+        <div class="quality-panel">
+          <div class="project-group-title">TEST COVERAGE</div>
+          ${state.qualityGate.coverage
+            ? '<div class="coverage-grid">' +
+              '<div><span>LINES</span><strong>' + escapeHtml(state.qualityGate.coverage.lines ?? '—') + '%</strong></div>' +
+              '<div><span>STATEMENTS</span><strong>' + escapeHtml(state.qualityGate.coverage.statements ?? '—') + '%</strong></div>' +
+              '<div><span>FUNCTIONS</span><strong>' + escapeHtml(state.qualityGate.coverage.functions ?? '—') + '%</strong></div>' +
+              '<div><span>BRANCHES</span><strong>' + escapeHtml(state.qualityGate.coverage.branches ?? '—') + '%</strong></div>' +
+              '</div>'
+            : '<p class="muted">No coverage/coverage-summary.json detected.</p>'}
+        </div>
+
+        <div class="quality-panel">
+          <div class="project-group-title">DEPENDENCY RISK</div>
+          ${state.qualityGate.dependency
+            ? '<div class="coverage-grid">' +
+              '<div><span>CRITICAL</span><strong>' + state.qualityGate.dependency.critical + '</strong></div>' +
+              '<div><span>HIGH</span><strong>' + state.qualityGate.dependency.high + '</strong></div>' +
+              '<div><span>MODERATE</span><strong>' + state.qualityGate.dependency.moderate + '</strong></div>' +
+              '<div><span>TOTAL</span><strong>' + state.qualityGate.dependency.total + '</strong></div>' +
+              '</div>' +
+              (state.qualityGate.dependency.error ? '<p class="muted">' + escapeHtml(state.qualityGate.dependency.error) + '</p>' : '')
+            : '<p class="muted">Run Scan Dependencies to execute npm audit for this Node project.</p>'}
+        </div>
+
+        <div class="quality-panel">
+          <div class="project-group-title">RECURRING ERRORS</div>
+          ${renderRecurringErrors(state.qualityGate.recurringErrors)}
+        </div>
+      </div>
+
+      <p class="muted" style="margin:12px 0 0">READY means no blocking diagnostics/conflicts and all available verification scripts passed. Dependency scan is explicit because npm audit may use the network.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'git')}>
@@ -5425,6 +5514,14 @@ async function runAction(command, value, context) {
       return applyAiEditProposal(context, context?.extensionUri);
     case 'discardAiEditProposal':
       return discardAiEditProposal();
+    case 'runQualityGate':
+      return runQualityGate(context, context?.extensionUri);
+    case 'scanDependencies':
+      return scanDependencies(context?.extensionUri);
+    case 'revertLastAiApply':
+      return revertLastAiApply();
+    case 'smartCommitGate':
+      return smartCommitGate(context, context?.extensionUri);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -5695,7 +5792,11 @@ async function openDashboard(context) {
         message.command === 'refactorSelectedCode' ||
         message.command === 'generateTestsProposal' ||
         message.command === 'applyAiEditProposal' ||
-        message.command === 'discardAiEditProposal'
+        message.command === 'discardAiEditProposal' ||
+        message.command === 'runQualityGate' ||
+        message.command === 'scanDependencies' ||
+        message.command === 'revertLastAiApply' ||
+        message.command === 'smartCommitGate'
       ) {
         await render();
       }
@@ -5768,6 +5869,7 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.languages.onDidChangeDiagnostics(() => {
       scheduleAutoDebug(context);
+      void updateErrorRecurrence(context);
     })
   );
 
