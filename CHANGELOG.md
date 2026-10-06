@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.0
+
+- Added Smart Developer Assistant for test, build, lint, and typecheck workflows.
+- Added captured task output with automatic AI analysis when a Command Center task fails.
+- Added Clipboard Error Analyzer for runtime errors and stack traces.
+- Added AI-assisted Git conflict review.
+- Added staged-diff AI commit review.
+- Added copy support for Smart Developer Assistant output and analysis.
+- Kept terminal/runtime capture explicit: Command Center does not scrape unrelated terminal sessions.
+
+
 ## 2.5.0
 
 - Added active coding-time history with daily goals, language time, file activity, edits, and saves.
