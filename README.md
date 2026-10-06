@@ -128,6 +128,20 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Generated tests never overwrite an existing file
 - AI edits remain proposals until the user chooses Apply
 
+## Quality Gate + Auto Verify — v2.8
+
+- Apply Only or Apply & Verify for reviewed AI proposals
+- Automatic diagnostics + lint + typecheck + test + build verification after Apply & Verify
+- Quality Gate score with READY / REVIEW / BLOCKED status
+- Before → After error comparison for AI fixes
+- Test coverage summary with weak files when coverage-summary.json is available
+- Explicit npm dependency audit + outdated package scan
+- Local recurring-error tracking
+- Revert Last AI Apply with stale-content protection
+- Smart Commit Gate that requires a fresh READY quality result before creating a commit
+- Explain Current File AI walkthrough
+- No dependency upgrade or source-code rollback happens without explicit user action
+
 ## Planned modules
 
 - Project Launcher
