@@ -93,6 +93,19 @@ The AI HUD only prepares context and copies prompts locally. It does not send pr
 
 GitHub account-level integration uses the user's existing VS Code authentication session and does not store the token in extension files. GitLab, Bitbucket, Azure DevOps, and other Git hosts already work for standard Git remote operations; deeper account-level APIs can be added provider-by-provider.
 
+## Galaxy Focus + AI Debug — v2.5
+
+- Active coding-time tracking instead of simple VS Code-open time
+- Daily coding goal with progress percentage
+- Focus timers: 25 minutes, 50 minutes, or custom duration
+- Status-bar focus timer and daily-progress display
+- Local 30-day coding history with file, language, edit, and save metadata
+- AI Debug Assistant powered by available VS Code language models
+- Workspace error/warning detection with file navigation and VS Code Quick Fix
+- Optional Auto Analyze mode with a 30-second throttle
+- Auto Analyze is off by default and only sends the selected diagnostic plus a small nearby code snippet
+- No database is required and source-code history is not persisted
+
 ## Planned modules
 
 - Project Launcher
