@@ -106,6 +106,17 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Auto Analyze is off by default and only sends the selected diagnostic plus a small nearby code snippet
 - No database is required and source-code history is not persisted
 
+## Smart Developer Assistant — v2.6
+
+- Run detected test, build, lint, and typecheck scripts directly from Command Center
+- Capture command output without scraping the VS Code terminal
+- Automatically analyze failed project checks with an available VS Code language model
+- Analyze copied runtime errors and stack traces from the clipboard
+- AI-assisted Git conflict review
+- AI review of staged changes before commit
+- Copy Smart Developer Assistant analysis/output
+- Explicit, user-triggered context sharing for clipboard, conflict, and staged-diff reviews
+
 ## Planned modules
 
 - Project Launcher
