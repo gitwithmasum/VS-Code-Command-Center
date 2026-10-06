@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const https = require('https');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 let lastEditorContext = {
   fileName: '',
@@ -35,6 +35,19 @@ let debugAssistantState = {
 let autoDebugTimer = null;
 let lastAutoDebugAt = 0;
 let dashboardRenderCallback = null;
+
+let smartAssistantState = {
+  running: false,
+  task: '',
+  command: '',
+  exitCode: null,
+  output: '',
+  analysis: '',
+  model: '',
+  lastError: '',
+  startedAt: 0,
+  finishedAt: 0
+};
 
 let githubStateCache = {
   at: 0,
@@ -2217,6 +2230,436 @@ function renderGalaxyExtensions(extensions) {
         </div>`
     )
     .join('');
+}
+
+
+async function requestGalaxyModel(prompt, systemInstruction = '') {
+  const models =
+    vscode.lm && typeof vscode.lm.selectChatModels === 'function'
+      ? await vscode.lm.selectChatModels()
+      : [];
+
+  if (!models.length) {
+    return {
+      ok: false,
+      text: '',
+      model: 'No model',
+      error: 'No VS Code language model is currently available.'
+    };
+  }
+
+  const model = models[0];
+  const messages = [];
+  if (systemInstruction) {
+    messages.push(vscode.LanguageModelChatMessage.User(systemInstruction));
+  }
+  messages.push(vscode.LanguageModelChatMessage.User(prompt));
+
+  const cts = new vscode.CancellationTokenSource();
+  let responseText = '';
+
+  try {
+    const response = await model.sendRequest(messages, {}, cts.token);
+    for await (const fragment of response.text) {
+      responseText += fragment;
+      if (responseText.length >= 16000) break;
+    }
+
+    return {
+      ok: true,
+      text: responseText.trim(),
+      model: model.name || model.family || model.id || 'VS Code Language Model',
+      error: ''
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      text: '',
+      model: '',
+      error: error?.message || 'Language model request failed.'
+    };
+  } finally {
+    cts.dispose();
+  }
+}
+
+function getSmartTaskScripts(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    return {
+      packageManager: '',
+      scripts: {},
+      available: []
+    };
+  }
+
+  const packageJson = readJsonIfExists(path.join(root, 'package.json'));
+  const scripts = packageJson?.scripts || {};
+  const packageManager =
+    fs.existsSync(path.join(root, 'pnpm-lock.yaml')) ? 'pnpm' :
+    fs.existsSync(path.join(root, 'yarn.lock')) ? 'yarn' :
+    'npm';
+
+  const preferred = [
+    ['test', ['test', 'test:unit', 'test:ci']],
+    ['build', ['build']],
+    ['lint', ['lint']],
+    ['typecheck', ['typecheck', 'type-check', 'check:types']]
+  ];
+
+  const available = preferred
+    .map(([kind, names]) => {
+      const script = names.find((name) => typeof scripts[name] === 'string');
+      return script ? { kind, script, command: scripts[script] } : null;
+    })
+    .filter(Boolean);
+
+  return { packageManager, scripts, available };
+}
+
+function runCapturedProcess(command, args, cwd, timeoutMs = 120000) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      shell: false,
+      env: process.env
+    });
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const append = (target, chunk) => {
+      const next = target + String(chunk || '');
+      return next.length > 24000 ? next.slice(-24000) : next;
+    };
+
+    child.stdout?.on('data', (chunk) => {
+      stdout = append(stdout, chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr = append(stderr, chunk);
+    });
+
+    child.on('error', (error) => {
+      finish({
+        exitCode: -1,
+        stdout,
+        stderr: append(stderr, error.message || String(error)),
+        timedOut: false
+      });
+    });
+
+    child.on('close', (code) => {
+      finish({
+        exitCode: Number.isInteger(code) ? code : -1,
+        stdout,
+        stderr,
+        timedOut: false
+      });
+    });
+
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish({
+        exitCode: -1,
+        stdout,
+        stderr: append(stderr, '\n[Galaxy] Task timed out and was stopped.'),
+        timedOut: true
+      });
+    }, timeoutMs);
+
+    child.on('exit', () => clearTimeout(timer));
+  });
+}
+
+function normalizeTaskOutput(stdout, stderr) {
+  const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
+  if (!combined) return '[no output]';
+  return combined.length > 22000 ? combined.slice(-22000) : combined;
+}
+
+async function analyzeSmartTaskOutput(kind, script, output, exitCode) {
+  const prompt = [
+    'Analyze this developer task result.',
+    'Task type: ' + kind,
+    'Script: ' + script,
+    'Exit code: ' + exitCode,
+    '',
+    'Output:',
+    truncatePromptText(output, 14000),
+    '',
+    'Return concise sections: What failed, Likely cause, Exact next steps, and Verification.',
+    'If the task passed, summarize meaningful warnings or risks instead of inventing a failure.'
+  ].join('\n');
+
+  return requestGalaxyModel(
+    prompt,
+    'Act as a precise senior software engineer. Base every claim on the supplied command output. Do not invent files or dependencies.'
+  );
+}
+
+async function runSmartProjectTask(context, extensionUri, kind) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showWarningMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const taskState = getSmartTaskScripts(extensionUri);
+  const chosen = taskState.available.find((item) => item.kind === kind);
+
+  if (!chosen) {
+    vscode.window.showInformationMessage('No matching ' + kind + ' script was found in package.json.');
+    return false;
+  }
+
+  const executable =
+    taskState.packageManager === 'pnpm'
+      ? (process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+      : taskState.packageManager === 'yarn'
+        ? (process.platform === 'win32' ? 'yarn.cmd' : 'yarn')
+        : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+
+  const args =
+    taskState.packageManager === 'yarn'
+      ? [chosen.script]
+      : ['run', chosen.script];
+
+  smartAssistantState = {
+    running: true,
+    task: kind,
+    command: taskState.packageManager + ' ' + args.join(' '),
+    exitCode: null,
+    output: '',
+    analysis: '',
+    model: '',
+    lastError: '',
+    startedAt: Date.now(),
+    finishedAt: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const result = await runCapturedProcess(executable, args, root);
+  const output = normalizeTaskOutput(result.stdout, result.stderr);
+
+  smartAssistantState.running = false;
+  smartAssistantState.exitCode = result.exitCode;
+  smartAssistantState.output = output;
+  smartAssistantState.finishedAt = Date.now();
+
+  if (result.exitCode !== 0 || /\b(error|failed|failure)\b/i.test(output)) {
+    const ai = await analyzeSmartTaskOutput(kind, chosen.script, output, result.exitCode);
+    smartAssistantState.analysis = ai.text;
+    smartAssistantState.model = ai.model;
+    smartAssistantState.lastError = ai.error;
+  }
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  vscode.window.showInformationMessage(
+    'Galaxy ' + kind + ' finished with exit code ' + result.exitCode + '.'
+  );
+  return result.exitCode === 0;
+}
+
+async function analyzeClipboardError() {
+  const clipboard = (await vscode.env.clipboard.readText()).trim();
+  if (!clipboard) {
+    vscode.window.showInformationMessage('Clipboard is empty. Copy an error or stack trace first.');
+    return false;
+  }
+
+  smartAssistantState = {
+    running: true,
+    task: 'clipboard-error',
+    command: 'Clipboard Error',
+    exitCode: null,
+    output: clipboard.slice(0, 22000),
+    analysis: '',
+    model: '',
+    lastError: '',
+    startedAt: Date.now(),
+    finishedAt: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const prompt = [
+    'Analyze this runtime/build/test error copied from a developer terminal or log.',
+    'Identify the root cause if supported by the text, then give the smallest practical fix and verification steps.',
+    'Call out uncertainty clearly.',
+    '',
+    truncatePromptText(clipboard, 14000)
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a debugging assistant. Do not assume project details that are absent from the pasted error.'
+  );
+
+  smartAssistantState.running = false;
+  smartAssistantState.analysis = ai.text;
+  smartAssistantState.model = ai.model;
+  smartAssistantState.lastError = ai.error;
+  smartAssistantState.finishedAt = Date.now();
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function analyzeFirstGitConflict(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const conflicts = runGit(root, ['diff', '--name-only', '--diff-filter=U'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  if (!conflicts.length) {
+    vscode.window.showInformationMessage('No unresolved Git conflicts were found.');
+    return false;
+  }
+
+  const selected = await vscode.window.showQuickPick(conflicts, {
+    title: 'AI Conflict Assistant',
+    placeHolder: 'Choose a conflicted file'
+  });
+  if (!selected) return false;
+
+  let content = '';
+  try {
+    content = fs.readFileSync(path.join(root, selected), 'utf8');
+  } catch {
+    vscode.window.showErrorMessage('Unable to read the conflicted file.');
+    return false;
+  }
+
+  smartAssistantState = {
+    running: true,
+    task: 'git-conflict',
+    command: selected,
+    exitCode: null,
+    output: content.slice(0, 22000),
+    analysis: '',
+    model: '',
+    lastError: '',
+    startedAt: Date.now(),
+    finishedAt: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const prompt = [
+    'Analyze this Git merge conflict.',
+    'File: ' + selected,
+    '',
+    truncatePromptText(content, 14000),
+    '',
+    'Explain what each side is trying to do, identify a safe merged intent, and propose a merged code block only if the evidence is sufficient.',
+    'Do not claim the merge is correct when project context is missing.'
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a careful merge-conflict reviewer. Preserve behavior from both sides when compatible and explicitly describe uncertainty.'
+  );
+
+  smartAssistantState.running = false;
+  smartAssistantState.analysis = ai.text;
+  smartAssistantState.model = ai.model;
+  smartAssistantState.lastError = ai.error;
+  smartAssistantState.finishedAt = Date.now();
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function reviewStagedChangesWithAi(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const diff = runGit(root, ['diff', '--cached', '--no-ext-diff', '--unified=3']);
+  if (!diff) {
+    vscode.window.showInformationMessage('Stage changes first, then run AI Commit Review.');
+    return false;
+  }
+
+  smartAssistantState = {
+    running: true,
+    task: 'commit-review',
+    command: 'git diff --cached',
+    exitCode: null,
+    output: diff.slice(0, 22000),
+    analysis: '',
+    model: '',
+    lastError: '',
+    startedAt: Date.now(),
+    finishedAt: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const prompt = [
+    'Review these staged Git changes before commit.',
+    'Look for correctness risks, regressions, missing edge cases, security mistakes, and missing tests.',
+    'Then recommend whether to Commit, Review, or Block.',
+    '',
+    truncatePromptText(diff, 14000)
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a strict but practical code reviewer. Only discuss risks visible in the provided diff.'
+  );
+
+  smartAssistantState.running = false;
+  smartAssistantState.analysis = ai.text;
+  smartAssistantState.model = ai.model;
+  smartAssistantState.lastError = ai.error;
+  smartAssistantState.finishedAt = Date.now();
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function copySmartAssistantResult() {
+  const text = smartAssistantState.analysis || smartAssistantState.output;
+  if (!text) {
+    vscode.window.showInformationMessage('No Smart Developer Assistant result is available yet.');
+    return false;
+  }
+  await vscode.env.clipboard.writeText(text);
+  vscode.window.showInformationMessage('Smart Developer Assistant result copied.');
+  return true;
+}
+
+function getSmartAssistantState(extensionUri) {
+  return {
+    ...smartAssistantState,
+    tasks: getSmartTaskScripts(extensionUri).available
+  };
+}
+
+function renderSmartTaskButtons(tasks) {
+  const labels = {
+    test: 'Run Tests',
+    build: 'Run Build',
+    lint: 'Run Lint',
+    typecheck: 'Run Typecheck'
+  };
+
+  if (!tasks.length) {
+    return '<span class="muted">No standard test/build/lint/typecheck scripts detected.</span>';
+  }
+
+  return tasks.map((task) =>
+    '<button data-smart-task="' + escapeHtml(task.kind) + '"><span>▶</span>' +
+    escapeHtml(labels[task.kind] || task.kind) + '</button>'
+  ).join('');
 }
 
 function getAiHudState() {
