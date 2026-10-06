@@ -2103,8 +2103,18 @@ async function deleteWorkspaceSnapshot(context, extensionUri, snapshotId) {
 
   const key = snapshotStorageKey(extensionUri);
   const all = context.globalState.get('galaxy.workspaceSnapshots', {});
-  const next = (all[key] || []).filter((item) => item.id !== snapshotId);
-  all[key] = next;
+  const snapshots = all[key] || [];
+  const snapshot = snapshots.find((item) => item.id === snapshotId);
+  if (!snapshot) return false;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Delete workspace snapshot "' + snapshot.name + '"?',
+    { modal: true },
+    'Delete'
+  );
+  if (confirm !== 'Delete') return false;
+
+  all[key] = snapshots.filter((item) => item.id !== snapshotId);
   await context.globalState.update('galaxy.workspaceSnapshots', all);
   return true;
 }
@@ -5581,6 +5591,7 @@ async function runAction(command, value, context) {
       return;
     }
     case 'runVsCodeCommand':
+      sessionCommandCount++;
       return vscode.commands.executeCommand(value);
     case 'openFile': {
       const uri = vscode.Uri.parse(value);
@@ -5834,7 +5845,9 @@ async function openDashboard(context) {
         message.command === 'runQualityGate' ||
         message.command === 'scanDependencies' ||
         message.command === 'revertLastAiApply' ||
-        message.command === 'smartCommitGate'
+        message.command === 'smartCommitGate' ||
+        message.command === 'runTerminal' ||
+        message.command === 'runVsCodeCommand'
       ) {
         await render();
       }
