@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const { getWorkspaceRoot } = require('../core/workspace');
 
 const PROBLEM_LABELS = ['A','B','C','D','E','F','G','H'];
-const VALID_STATUSES = ['NOT STARTED','SOLVING','WA','TLE','RE','AC'];
+const VALID_STATUSES = ['NOT STARTED','SOLVING','WA','TLE','RE','CE','AC'];
 
 function cpWorkspaceKey() {
   return getWorkspaceRoot() || '__no_workspace__';
@@ -33,7 +33,10 @@ function defaultSession() {
     currentProblem: 'A',
     problemStartedAt: 0,
     problems: defaultProblems(),
-    lastRun: null
+    lastRun: null,
+    lastSuite: null,
+    lastStress: null,
+    history: []
   };
 }
 
@@ -61,7 +64,10 @@ function normalizeSession(session) {
       : 'A',
     problemStartedAt: Math.max(0, Number(value.problemStartedAt || 0)),
     problems,
-    lastRun: value.lastRun || null
+    lastRun: value.lastRun || null,
+    lastSuite: value.lastSuite || null,
+    lastStress: value.lastStress || null,
+    history: Array.isArray(value.history) ? value.history.slice(0, 30) : []
   };
 }
 
@@ -356,115 +362,403 @@ async function compileNative(filePath, language) {
   return { ...result, outputPath, compiler };
 }
 
-async function runCurrentFile(document, input, expectedOutput) {
+async function prepareProgram(document) {
   if (!document || document.uri.scheme !== 'file') {
     return {
-      verdict: 'NO FILE',
-      runtimeMs: 0,
-      stdout: '',
-      stderr: 'Open a local source file first.',
-      expected: expectedOutput || ''
+      ok: false,
+      error: 'Open a local source file first.',
+      cleanup() {}
     };
   }
 
   const filePath = document.uri.fsPath;
   const cwd = path.dirname(filePath);
   const language = document.languageId;
-  let result;
   let compiledPath = '';
 
-  try {
-    if (language === 'cpp' || language === 'c') {
-      const compile = await compileNative(filePath, language);
-      compiledPath = compile.outputPath;
-      if (compile.exitCode !== 0 || compile.timedOut) {
-        return {
-          verdict: 'COMPILE ERROR',
-          runtimeMs: compile.runtimeMs,
-          stdout: compile.stdout,
-          stderr: compile.stderr,
-          expected: expectedOutput || ''
-        };
-      }
-      result = await runProcessWithInput(
-        compiledPath,
-        [],
-        cwd,
-        input,
-        5000
-      );
-    } else if (language === 'python') {
-      const python = process.platform === 'win32' ? 'python' : 'python3';
-      result = await runProcessWithInput(
-        python,
-        [filePath],
-        cwd,
-        input,
-        5000
-      );
-      if (result.exitCode === -1 && /ENOENT|not found/i.test(result.stderr)) {
-        result = await runProcessWithInput(
-          process.platform === 'win32' ? 'py' : 'python',
-          [filePath],
-          cwd,
-          input,
-          5000
-        );
-      }
-    } else if (language === 'javascript') {
-      result = await runProcessWithInput(
-        process.execPath,
-        [filePath],
-        cwd,
-        input,
-        5000
-      );
-    } else {
+  if (language === 'cpp' || language === 'c') {
+    const compile = await compileNative(filePath, language);
+    compiledPath = compile.outputPath;
+    if (compile.exitCode !== 0 || compile.timedOut) {
+      try { if (compiledPath) fs.unlinkSync(compiledPath); } catch {}
       return {
-        verdict: 'UNSUPPORTED',
-        runtimeMs: 0,
-        stdout: '',
-        stderr:
-          'Sample Runner currently supports C/C++, Python, and JavaScript.',
-        expected: expectedOutput || ''
+        ok: false,
+        compileError: true,
+        result: compile,
+        error: compile.stderr || 'Compilation failed.',
+        cleanup() {}
       };
     }
 
-    let verdict = 'PASS';
-    if (result.timedOut) verdict = 'TLE';
-    else if (result.exitCode !== 0) verdict = 'RUNTIME ERROR';
-    else if (
-      String(expectedOutput || '').trim() &&
-      normalizeOutput(result.stdout) !== normalizeOutput(expectedOutput)
-    ) {
-      verdict = 'WRONG ANSWER';
-    }
-
     return {
-      verdict,
+      ok: true,
+      language,
+      run(input, timeoutMs = 5000) {
+        return runProcessWithInput(compiledPath, [], cwd, input, timeoutMs);
+      },
+      cleanup() {
+        try { if (compiledPath) fs.unlinkSync(compiledPath); } catch {}
+      }
+    };
+  }
+
+  if (language === 'python') {
+    const primary = process.platform === 'win32' ? 'python' : 'python3';
+    return {
+      ok: true,
+      language,
+      async run(input, timeoutMs = 5000) {
+        let result = await runProcessWithInput(primary, [filePath], cwd, input, timeoutMs);
+        if (result.exitCode === -1 && /ENOENT|not found/i.test(result.stderr)) {
+          result = await runProcessWithInput(
+            process.platform === 'win32' ? 'py' : 'python',
+            [filePath],
+            cwd,
+            input,
+            timeoutMs
+          );
+        }
+        return result;
+      },
+      cleanup() {}
+    };
+  }
+
+  if (language === 'javascript') {
+    return {
+      ok: true,
+      language,
+      run(input, timeoutMs = 5000) {
+        return runProcessWithInput(process.execPath, [filePath], cwd, input, timeoutMs);
+      },
+      cleanup() {}
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'Runner currently supports C/C++, Python, and JavaScript.',
+    cleanup() {}
+  };
+}
+
+function verdictFromResult(result, expectedOutput = '') {
+  if (result.timedOut) return 'TLE';
+  if (result.exitCode !== 0) return 'RUNTIME ERROR';
+  if (
+    String(expectedOutput || '').trim() &&
+    normalizeOutput(result.stdout) !== normalizeOutput(expectedOutput)
+  ) {
+    return 'WRONG ANSWER';
+  }
+  return 'PASS';
+}
+
+async function runCurrentFile(document, input, expectedOutput) {
+  const prepared = await prepareProgram(document);
+  if (!prepared.ok) {
+    if (prepared.compileError) {
+      return {
+        verdict: 'COMPILE ERROR',
+        runtimeMs: prepared.result?.runtimeMs || 0,
+        stdout: prepared.result?.stdout || '',
+        stderr: prepared.error,
+        expected: expectedOutput || '',
+        language: document?.languageId || ''
+      };
+    }
+    return {
+      verdict: 'UNSUPPORTED',
+      runtimeMs: 0,
+      stdout: '',
+      stderr: prepared.error,
+      expected: expectedOutput || '',
+      language: document?.languageId || ''
+    };
+  }
+
+  try {
+    const result = await prepared.run(input, 5000);
+    return {
+      verdict: verdictFromResult(result, expectedOutput),
       runtimeMs: result.runtimeMs,
       stdout: result.stdout,
       stderr: result.stderr,
       expected: expectedOutput || '',
-      language
+      language: prepared.language
     };
   } finally {
-    if (compiledPath) {
-      try {
-        fs.unlinkSync(compiledPath);
-      } catch {}
-    }
+    prepared.cleanup();
   }
+}
+
+function splitCases(value) {
+  const text = String(value || '').replace(/\r\n/g, '\n').trim();
+  if (!text) return [''];
+  return text.split(/^\s*---+\s*$/m).map((item) => item.trim());
+}
+
+async function runMultipleCases(document, rawInputs, rawExpected) {
+  const inputs = splitCases(rawInputs).slice(0, 20);
+  const expected = splitCases(rawExpected).slice(0, 20);
+
+  if (expected.length !== inputs.length) {
+    return {
+      ok: false,
+      error: 'Input and expected-output case counts must match. Separate cases with a line containing --- only.',
+      cases: []
+    };
+  }
+
+  const prepared = await prepareProgram(document);
+  if (!prepared.ok) {
+    return {
+      ok: false,
+      error: prepared.error || 'Unable to prepare the program.',
+      compileError: Boolean(prepared.compileError),
+      cases: []
+    };
+  }
+
+  const cases = [];
+  try {
+    for (let index = 0; index < inputs.length; index++) {
+      const result = await prepared.run(inputs[index], 5000);
+      const verdict = verdictFromResult(result, expected[index]);
+      cases.push({
+        index: index + 1,
+        input: inputs[index],
+        expected: expected[index],
+        verdict,
+        runtimeMs: result.runtimeMs,
+        stdout: result.stdout,
+        stderr: result.stderr
+      });
+      if (verdict !== 'PASS') break;
+    }
+  } finally {
+    prepared.cleanup();
+  }
+
+  return {
+    ok: true,
+    total: inputs.length,
+    passed: cases.filter((item) => item.verdict === 'PASS').length,
+    cases,
+    verdict: cases.find((item) => item.verdict !== 'PASS')?.verdict || 'PASS'
+  };
+}
+
+async function runStressTest(generatorDocument, bruteDocument, optimizedDocument, iterations = 20) {
+  const count = Math.max(1, Math.min(100, Number(iterations || 20)));
+  const generator = await prepareProgram(generatorDocument);
+  if (!generator.ok) return { ok: false, stage: 'generator', error: generator.error };
+
+  const brute = await prepareProgram(bruteDocument);
+  if (!brute.ok) {
+    generator.cleanup();
+    return { ok: false, stage: 'brute', error: brute.error };
+  }
+
+  const optimized = await prepareProgram(optimizedDocument);
+  if (!optimized.ok) {
+    generator.cleanup();
+    brute.cleanup();
+    return { ok: false, stage: 'optimized', error: optimized.error };
+  }
+
+  try {
+    for (let iteration = 1; iteration <= count; iteration++) {
+      const generated = await generator.run('', 3000);
+      if (generated.timedOut || generated.exitCode !== 0) {
+        return {
+          ok: false,
+          stage: 'generator',
+          iteration,
+          error: generated.stderr || 'Generator failed.'
+        };
+      }
+
+      const input = generated.stdout;
+      const bruteResult = await brute.run(input, 5000);
+      if (bruteResult.timedOut || bruteResult.exitCode !== 0) {
+        return {
+          ok: false,
+          stage: 'brute',
+          iteration,
+          input,
+          error: bruteResult.stderr || (bruteResult.timedOut ? 'Brute solution timed out.' : 'Brute solution failed.')
+        };
+      }
+
+      const optimizedResult = await optimized.run(input, 5000);
+      if (optimizedResult.timedOut || optimizedResult.exitCode !== 0) {
+        return {
+          ok: false,
+          stage: 'optimized',
+          iteration,
+          input,
+          error: optimizedResult.stderr || (optimizedResult.timedOut ? 'Optimized solution timed out.' : 'Optimized solution failed.'),
+          verdict: optimizedResult.timedOut ? 'TLE' : 'RUNTIME ERROR'
+        };
+      }
+
+      if (normalizeOutput(bruteResult.stdout) !== normalizeOutput(optimizedResult.stdout)) {
+        return {
+          ok: true,
+          verdict: 'MISMATCH',
+          iteration,
+          input,
+          bruteOutput: bruteResult.stdout,
+          optimizedOutput: optimizedResult.stdout,
+          bruteRuntimeMs: bruteResult.runtimeMs,
+          optimizedRuntimeMs: optimizedResult.runtimeMs
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      verdict: 'PASS',
+      iterations: count
+    };
+  } finally {
+    generator.cleanup();
+    brute.cleanup();
+    optimized.cleanup();
+  }
+}
+
+function statusFromVerdict(verdict) {
+  if (verdict === 'WRONG ANSWER' || verdict === 'MISMATCH') return 'WA';
+  if (verdict === 'TLE') return 'TLE';
+  if (verdict === 'RUNTIME ERROR') return 'RE';
+  if (verdict === 'COMPILE ERROR') return 'CE';
+  return '';
+}
+
+function pushHistory(session, entry) {
+  session.history = [
+    entry,
+    ...(Array.isArray(session.history) ? session.history : [])
+  ].slice(0, 30);
 }
 
 async function saveLastRun(context, run) {
   const session = getStoredSession(context);
-  session.lastRun = {
+  const entry = {
     ...run,
     at: Date.now(),
-    problem: session.currentProblem
+    problem: session.currentProblem,
+    type: 'sample'
   };
+  session.lastRun = entry;
+  pushHistory(session, entry);
+
+  const autoStatus = statusFromVerdict(run.verdict);
+  if (autoStatus) {
+    session.problems[session.currentProblem].status = autoStatus;
+    session.problems[session.currentProblem].attempts += 1;
+  }
+
   await saveSession(context, session);
+}
+
+async function saveLastSuite(context, suite) {
+  const session = getStoredSession(context);
+  const entry = {
+    ...suite,
+    at: Date.now(),
+    problem: session.currentProblem,
+    type: 'suite'
+  };
+  session.lastSuite = entry;
+  pushHistory(session, {
+    type: 'suite',
+    at: entry.at,
+    problem: entry.problem,
+    verdict: suite.verdict,
+    passed: suite.passed,
+    total: suite.total
+  });
+
+  const autoStatus = statusFromVerdict(suite.verdict);
+  if (autoStatus) {
+    session.problems[session.currentProblem].status = autoStatus;
+    session.problems[session.currentProblem].attempts += 1;
+  }
+
+  await saveSession(context, session);
+}
+
+async function saveStressResult(context, result) {
+  const session = getStoredSession(context);
+  const entry = {
+    ...result,
+    at: Date.now(),
+    problem: session.currentProblem,
+    type: 'stress'
+  };
+  session.lastStress = entry;
+  pushHistory(session, {
+    type: 'stress',
+    at: entry.at,
+    problem: entry.problem,
+    verdict: result.verdict || 'FAILED',
+    iteration: result.iteration || result.iterations || 0
+  });
+
+  const autoStatus = statusFromVerdict(result.verdict);
+  if (autoStatus) {
+    session.problems[session.currentProblem].status = autoStatus;
+    session.problems[session.currentProblem].attempts += 1;
+  }
+
+  await saveSession(context, session);
+}
+
+function getCpTemplate(language, label = 'A') {
+  const safeLabel = String(label || 'A').toUpperCase().replace(/[^A-Z0-9_-]/g, '') || 'A';
+
+  if (language === 'python') {
+    return {
+      extension: 'py',
+      content:
+        'import sys\n' +
+        'input = sys.stdin.readline\n\n' +
+        'def solve():\n' +
+        '    # Problem ' + safeLabel + '\n' +
+        '    pass\n\n' +
+        "if __name__ == '__main__':\n" +
+        '    solve()\n'
+    };
+  }
+
+  if (language === 'javascript') {
+    return {
+      extension: 'js',
+      content:
+        "const fs = require('fs');\n" +
+        "const input = fs.readFileSync(0, 'utf8').trim();\n\n" +
+        'function solve(data) {\n' +
+        '  // Problem ' + safeLabel + '\n' +
+        '}\n\n' +
+        'solve(input);\n'
+    };
+  }
+
+  return {
+    extension: 'cpp',
+    content:
+      '#include <bits/stdc++.h>\n' +
+      'using namespace std;\n\n' +
+      'int main() {\n' +
+      '    ios::sync_with_stdio(false);\n' +
+      '    cin.tie(nullptr);\n\n' +
+      '    // Problem ' + safeLabel + '\n' +
+      '    return 0;\n' +
+      '}\n'
+  };
 }
 
 const SNIPPETS = {
@@ -576,6 +870,11 @@ module.exports = {
   setProblemStatus,
   resetCpSession,
   runCurrentFile,
+  runMultipleCases,
+  runStressTest,
   saveLastRun,
+  saveLastSuite,
+  saveStressResult,
+  getCpTemplate,
   getCpSnippets
 };
