@@ -125,7 +125,7 @@ function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
   lastEditorContext.fileName = editor.document.fileName || '';
-  lastEditorContext.languageId = document.languageId || '';
+  lastEditorContext.languageId = editor.document.languageId || '';
   lastEditorContext.uri = editor.document.uri.toString();
 
   if (!editor.selection.isEmpty) {
@@ -2388,7 +2388,7 @@ async function openCpSnippetVault() {
     return false;
   }
 
-  const snippets = getCpSnippets(document.languageId);
+  const snippets = getCpSnippets(editor.document.languageId);
   const selected = await vscode.window.showQuickPick(
     snippets.map((item) => ({
       label: item.label,
