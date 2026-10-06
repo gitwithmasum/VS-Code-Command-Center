@@ -89,7 +89,10 @@ function liveProblemMs(session, label, now = Date.now()) {
     session.currentProblem === label &&
     session.problemStartedAt
   ) {
-    value += Math.max(0, now - session.problemStartedAt);
+    const effectiveNow = session.contest.endAt
+      ? Math.min(now, Number(session.contest.endAt))
+      : now;
+    value += Math.max(0, effectiveNow - session.problemStartedAt);
   }
   return value;
 }
@@ -169,7 +172,10 @@ async function stopContest(context) {
 
   if (session.contest.running && session.problemStartedAt) {
     const current = session.problems[session.currentProblem];
-    current.activeMs += Math.max(0, now - session.problemStartedAt);
+    const effectiveNow = session.contest.endAt
+      ? Math.min(now, Number(session.contest.endAt))
+      : now;
+    current.activeMs += Math.max(0, effectiveNow - session.problemStartedAt);
   }
 
   const remainingMs = session.contest.endAt
@@ -326,7 +332,7 @@ function runProcessWithInput(command, args, cwd, input, timeoutMs = 5000) {
   });
 }
 
-async function compileCpp(filePath) {
+async function compileNative(filePath, language) {
   const tempBase = path.join(
     os.tmpdir(),
     'galaxy-cp-' + process.pid + '-' + Date.now()
@@ -335,15 +341,19 @@ async function compileCpp(filePath) {
     ? tempBase + '.exe'
     : tempBase;
 
+  const isC = language === 'c';
+  const compiler = isC ? 'gcc' : 'g++';
+  const standard = isC ? '-std=c17' : '-std=c++17';
+
   const result = await runProcessWithInput(
-    'g++',
-    [filePath, '-std=c++17', '-O2', '-pipe', '-o', outputPath],
+    compiler,
+    [filePath, standard, '-O2', '-pipe', '-o', outputPath],
     path.dirname(filePath),
     '',
     20000
   );
 
-  return { ...result, outputPath };
+  return { ...result, outputPath, compiler };
 }
 
 async function runCurrentFile(document, input, expectedOutput) {
@@ -365,7 +375,7 @@ async function runCurrentFile(document, input, expectedOutput) {
 
   try {
     if (language === 'cpp' || language === 'c') {
-      const compile = await compileCpp(filePath);
+      const compile = await compileNative(filePath, language);
       compiledPath = compile.outputPath;
       if (compile.exitCode !== 0 || compile.timedOut) {
         return {
