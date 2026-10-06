@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.0
+
+- Added active coding-time history with daily goals, language time, file activity, edits, and saves.
+- Added 25-minute, 50-minute, and custom focus timers with pause, resume, and stop controls.
+- Added focus timer and coding-goal progress to the Galaxy status bar.
+- Added AI Debug Assistant using available VS Code language models.
+- Added error/warning detection, diagnostic navigation, and VS Code Quick Fix integration.
+- Added opt-in Auto Analyze with throttling and limited nearby-code context.
+- Fixed no-workspace detection so the installed extension directory is no longer treated as the active project.
+- Coding history remains local and does not persist source-code contents.
+
+
 ## 2.3.0
 
 - Added GitHub Issues, Pull Requests, and Actions workflow status for the current GitHub repository.
