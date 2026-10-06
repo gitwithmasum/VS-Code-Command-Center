@@ -2166,6 +2166,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'server', label: 'Dev Server Monitor' },
   { id: 'smartActions', label: 'Smart Project Actions' },
   { id: 'smartDeveloper', label: 'Smart Developer Assistant' },
+  { id: 'aiFix', label: 'AI Fix Studio' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
   { id: 'modes', label: 'Developer Modes' },
@@ -3719,6 +3720,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     providerBridge: getProviderBridgeState(),
     advancedRepo: getAdvancedRepoState(extensionUri),
     smartAssistant: getSmartAssistantState(extensionUri),
+    aiEdit: getAiEditState(),
     recentFiles,
     ai: getAiHudState(),
     debugAssistant: context ? getDebugAssistantState(context) : null,
@@ -3885,6 +3887,14 @@ function getDashboardHtml(state) {
   .smart-dev-box strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .smart-dev-output{margin-top:12px;padding:14px;border:1px solid rgba(139,92,255,.16);border-radius:12px;background:rgba(0,0,0,.22);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;font-family:Consolas,'Courier New',monospace;font-size:11px;line-height:1.5}
   .smart-dev-analysis{margin-top:12px;padding:14px;border:1px solid rgba(0,247,255,.14);border-radius:12px;background:rgba(0,247,255,.018);white-space:pre-wrap;word-break:break-word;max-height:380px;overflow:auto;line-height:1.55}
+  .ai-fix-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .ai-fix-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .ai-fix-box{padding:12px;border:1px solid rgba(255,79,216,.15);border-radius:12px;background:rgba(255,79,216,.025)}
+  .ai-fix-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .ai-fix-box strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ai-fix-summary{padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018);line-height:1.55}
+  .ai-fix-verify{margin:10px 0 0;padding-left:18px;color:var(--muted)}
+  .ai-fix-verify li{margin:5px 0}
   .git-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
   .git-box{padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
   .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
@@ -3999,7 +4009,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -4133,6 +4143,46 @@ function getDashboardHtml(state) {
         : ''}
 
       <p class="muted" style="margin:12px 0 0">Test/build/lint/typecheck output is analyzed only when Command Center runs that task and detects a failure. Clipboard, conflict, and staged-diff analysis run only when you click them.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'aiFix')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">AI FIX STUDIO</div>
+          <div class="muted">Generate a proposal, review the diff, then explicitly apply it.</div>
+        </div>
+        ${state.aiEdit.hasProposal
+          ? '<div class="launcher-actions"><button data-command="reviewAiEditProposal"><span>◫</span>Review Diff</button><button data-command="applyAiEditProposal"><span>✓</span>Apply</button><button data-command="discardAiEditProposal"><span>×</span>Discard</button></div>'
+          : ''}
+      </div>
+
+      <div class="ai-fix-actions">
+        <button data-command="generateDiagnosticFix"><span>✦</span>Fix Current Error</button>
+        <button data-command="refactorSelectedCode"><span>◇</span>Refactor Selection</button>
+        <button data-command="generateTestsProposal"><span>＋</span>Generate Tests</button>
+      </div>
+
+      <div class="ai-fix-meta">
+        <div class="ai-fix-box"><span>STATUS</span><strong>${state.aiEdit.running ? 'GENERATING…' : (state.aiEdit.hasProposal ? 'PROPOSAL READY' : 'IDLE')}</strong></div>
+        <div class="ai-fix-box"><span>TYPE</span><strong>${escapeHtml(state.aiEdit.kind || 'None')}</strong></div>
+        <div class="ai-fix-box"><span>CONFIDENCE</span><strong>${escapeHtml(state.aiEdit.confidence || 'Not rated')}</strong></div>
+        <div class="ai-fix-box"><span>MODEL</span><strong>${escapeHtml(state.aiEdit.model || 'Not used yet')}</strong></div>
+      </div>
+
+      ${state.aiEdit.summary
+        ? '<div class="ai-fix-summary"><strong>Proposal</strong><br><br>' + escapeHtml(state.aiEdit.summary) +
+          (state.aiEdit.targetPath ? '<br><br><span class="muted">Target: ' + escapeHtml(state.aiEdit.targetPath) + '</span>' : '') +
+          (state.aiEdit.verification?.length
+            ? '<ul class="ai-fix-verify">' + state.aiEdit.verification.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>'
+            : '') +
+          '</div>'
+        : '<p class="muted">No proposal yet. AI edits are never applied automatically.</p>'}
+
+      ${state.aiEdit.error
+        ? '<div class="smart-dev-analysis"><strong>Proposal error</strong>\n\n' + escapeHtml(state.aiEdit.error) + '</div>'
+        : ''}
+
+      <p class="muted" style="margin:12px 0 0">Apply is blocked if the source file changed after the proposal was created. Generated tests refuse to overwrite an existing file.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'git')}>
@@ -4855,6 +4905,18 @@ async function runAction(command, value, context) {
       return reviewStagedChangesWithAi(context?.extensionUri);
     case 'copySmartAssistantResult':
       return copySmartAssistantResult();
+    case 'generateDiagnosticFix':
+      return generateDiagnosticFixProposal();
+    case 'refactorSelectedCode':
+      return refactorSelectedCodeProposal();
+    case 'generateTestsProposal':
+      return generateTestsProposal(context?.extensionUri);
+    case 'reviewAiEditProposal':
+      return reviewAiEditProposal();
+    case 'applyAiEditProposal':
+      return applyAiEditProposal();
+    case 'discardAiEditProposal':
+      return discardAiEditProposal();
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -5120,7 +5182,12 @@ async function openDashboard(context) {
         message.command === 'runSmartProjectTask' ||
         message.command === 'analyzeClipboardError' ||
         message.command === 'analyzeGitConflictAi' ||
-        message.command === 'reviewStagedChangesAi'
+        message.command === 'reviewStagedChangesAi' ||
+        message.command === 'generateDiagnosticFix' ||
+        message.command === 'refactorSelectedCode' ||
+        message.command === 'generateTestsProposal' ||
+        message.command === 'applyAiEditProposal' ||
+        message.command === 'discardAiEditProposal'
       ) {
         await render();
       }
@@ -5202,6 +5269,13 @@ async function activate(context) {
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       await rememberCurrentProject(context);
     })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      'galaxy-ai-preview',
+      new GalaxyAiPreviewProvider()
+    )
   );
 
   const sidebarProvider = new GalaxySidebarProvider(context.extensionUri, context);
