@@ -49,6 +49,23 @@ let smartAssistantState = {
   finishedAt: 0
 };
 
+let aiEditState = {
+  running: false,
+  kind: '',
+  sourceUri: '',
+  targetPath: '',
+  originalText: '',
+  proposedText: '',
+  summary: '',
+  confidence: '',
+  verification: [],
+  model: '',
+  error: '',
+  proposalId: ''
+};
+
+const aiPreviewDocuments = new Map();
+
 let githubStateCache = {
   at: 0,
   value: null
@@ -2233,6 +2250,548 @@ function renderGalaxyExtensions(extensions) {
     .join('');
 }
 
+
+
+class GalaxyAiPreviewProvider {
+  provideTextDocumentContent(uri) {
+    return aiPreviewDocuments.get(uri.toString()) || '';
+  }
+}
+
+function extractJsonObject(value) {
+  const raw = String(value || '').trim();
+  const fenced = raw.match(/\`\`\`(?:json)?\s*([\s\S]*?)\`\`\`/i);
+  const candidate = fenced ? fenced[1].trim() : raw;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('AI response did not contain a JSON object.');
+  }
+  return JSON.parse(candidate.slice(start, end + 1));
+}
+
+function mergeLineRanges(ranges) {
+  const sorted = ranges
+    .map(([start, end]) => [Math.max(0, start), Math.max(0, end)])
+    .filter(([start, end]) => end >= start)
+    .sort((a, b) => a[0] - b[0]);
+
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || range[0] > last[1] + 1) {
+      merged.push([...range]);
+    } else {
+      last[1] = Math.max(last[1], range[1]);
+    }
+  }
+  return merged;
+}
+
+function buildDiagnosticEditContext(document, targetLine) {
+  const maxLine = Math.max(0, document.lineCount - 1);
+  const ranges = document.getText().length <= 9000
+    ? [[0, maxLine]]
+    : mergeLineRanges([
+        [0, Math.min(29, maxLine)],
+        [Math.max(0, targetLine - 10), Math.min(maxLine, targetLine + 10)]
+      ]);
+
+  const chunks = [];
+  for (const [start, end] of ranges) {
+    for (let line = start; line <= end; line++) {
+      chunks.push(String(line + 1).padStart(4, ' ') + ' | ' + document.lineAt(line).text);
+    }
+  }
+
+  return {
+    ranges,
+    text: chunks.join('\n').slice(0, 14000)
+  };
+}
+
+function lineInsideRanges(line, ranges) {
+  return ranges.some(([start, end]) => line >= start && line <= end);
+}
+
+function normalizeAiTextEdits(document, rawEdits, allowedRanges) {
+  if (!Array.isArray(rawEdits)) return [];
+  const edits = [];
+
+  for (const item of rawEdits.slice(0, 20)) {
+    const startLine = Number(item.startLine) - 1;
+    const startCharacter = Number(item.startCharacter || 0);
+    const endLine = Number(item.endLine) - 1;
+    const endCharacter = Number(item.endCharacter || 0);
+    const newText = String(item.newText ?? '');
+
+    if (
+      !Number.isInteger(startLine) ||
+      !Number.isInteger(endLine) ||
+      !Number.isInteger(startCharacter) ||
+      !Number.isInteger(endCharacter) ||
+      startLine < 0 ||
+      endLine < startLine ||
+      endLine >= document.lineCount ||
+      startCharacter < 0 ||
+      endCharacter < 0
+    ) {
+      continue;
+    }
+
+    if (
+      allowedRanges?.length &&
+      (!lineInsideRanges(startLine, allowedRanges) || !lineInsideRanges(endLine, allowedRanges))
+    ) {
+      continue;
+    }
+
+    const startLineText = document.lineAt(startLine).text;
+    const endLineText = document.lineAt(endLine).text;
+    if (startCharacter > startLineText.length || endCharacter > endLineText.length) {
+      continue;
+    }
+
+    const range = new vscode.Range(
+      new vscode.Position(startLine, startCharacter),
+      new vscode.Position(endLine, endCharacter)
+    );
+
+    edits.push({
+      range,
+      startOffset: document.offsetAt(range.start),
+      endOffset: document.offsetAt(range.end),
+      newText
+    });
+  }
+
+  edits.sort((a, b) => a.startOffset - b.startOffset);
+  for (let index = 1; index < edits.length; index++) {
+    if (edits[index].startOffset < edits[index - 1].endOffset) {
+      throw new Error('AI proposed overlapping edits, so the proposal was rejected.');
+    }
+  }
+
+  return edits;
+}
+
+function applyEditsToText(originalText, edits) {
+  let output = originalText;
+  for (const edit of [...edits].sort((a, b) => b.startOffset - a.startOffset)) {
+    output =
+      output.slice(0, edit.startOffset) +
+      edit.newText +
+      output.slice(edit.endOffset);
+  }
+  return output;
+}
+
+function clearAiEditProposal() {
+  aiPreviewDocuments.clear();
+  aiEditState = {
+    running: false,
+    kind: '',
+    sourceUri: '',
+    targetPath: '',
+    originalText: '',
+    proposedText: '',
+    summary: '',
+    confidence: '',
+    verification: [],
+    model: '',
+    error: '',
+    proposalId: ''
+  };
+}
+
+function getAiEditState() {
+  return {
+    running: aiEditState.running,
+    kind: aiEditState.kind,
+    sourceUri: aiEditState.sourceUri,
+    targetPath: aiEditState.targetPath,
+    summary: aiEditState.summary,
+    confidence: aiEditState.confidence,
+    verification: aiEditState.verification,
+    model: aiEditState.model,
+    error: aiEditState.error,
+    proposalId: aiEditState.proposalId,
+    hasProposal: Boolean(aiEditState.proposalId && aiEditState.proposedText)
+  };
+}
+
+async function saveAiEditProposal({
+  kind,
+  sourceUri = '',
+  targetPath = '',
+  originalText = '',
+  proposedText = '',
+  summary = '',
+  confidence = '',
+  verification = [],
+  model = ''
+}) {
+  const proposalId = String(Date.now());
+  aiEditState = {
+    running: false,
+    kind,
+    sourceUri,
+    targetPath,
+    originalText,
+    proposedText,
+    summary,
+    confidence,
+    verification: Array.isArray(verification) ? verification.slice(0, 8) : [],
+    model,
+    error: '',
+    proposalId
+  };
+
+  aiPreviewDocuments.clear();
+  const originalUri = vscode.Uri.parse(
+    'galaxy-ai-preview:/original/' + proposalId + '?name=' +
+    encodeURIComponent(path.basename(targetPath || sourceUri || 'original'))
+  );
+  const proposedUri = vscode.Uri.parse(
+    'galaxy-ai-preview:/proposed/' + proposalId + '?name=' +
+    encodeURIComponent(path.basename(targetPath || sourceUri || 'proposal'))
+  );
+  aiPreviewDocuments.set(originalUri.toString(), originalText);
+  aiPreviewDocuments.set(proposedUri.toString(), proposedText);
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return { originalUri, proposedUri };
+}
+
+async function generateDiagnosticFixProposal() {
+  const diagnostics = collectDebugDiagnostics();
+  const target =
+    diagnostics.find((item) => item.severity === 'Error') ||
+    diagnostics[0];
+
+  if (!target) {
+    vscode.window.showInformationMessage('No current error or warning is available to fix.');
+    return false;
+  }
+
+  let document;
+  try {
+    document = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.uri));
+  } catch {
+    vscode.window.showErrorMessage('Unable to open the diagnostic file.');
+    return false;
+  }
+
+  const targetLine = Math.max(0, target.line - 1);
+  const context = buildDiagnosticEditContext(document, targetLine);
+  aiEditState.running = true;
+  aiEditState.kind = 'diagnostic-fix';
+  aiEditState.error = '';
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const prompt = [
+    'Create a minimal safe code fix for this VS Code diagnostic.',
+    'Return ONLY JSON with this exact shape:',
+    '{"summary":"...","confidence":"high|medium|low","verification":["..."],"edits":[{"startLine":1,"startCharacter":0,"endLine":1,"endCharacter":0,"newText":"..."}]}',
+    'Line numbers are 1-based and characters are 0-based.',
+    'Only edit lines included in the supplied numbered context.',
+    'If the fix requires code outside the supplied context or you are not confident, return an empty edits array and explain why in summary.',
+    '',
+    'File: ' + target.file,
+    'Language: ' + document.languageId,
+    'Diagnostic: ' + target.message,
+    'Location: line ' + target.line + ', column ' + target.character,
+    '',
+    'Numbered context:',
+    context.text
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a precise code repair tool. Preserve unrelated behavior and return valid JSON only.'
+  );
+
+  try {
+    if (!ai.ok) throw new Error(ai.error || 'No AI model response.');
+    const parsed = extractJsonObject(ai.text);
+    const edits = normalizeAiTextEdits(document, parsed.edits, context.ranges);
+    if (!edits.length) {
+      throw new Error(parsed.summary || 'AI did not return a safe editable fix.');
+    }
+
+    const originalText = document.getText();
+    const proposedText = applyEditsToText(originalText, edits);
+    await saveAiEditProposal({
+      kind: 'diagnostic-fix',
+      sourceUri: document.uri.toString(),
+      targetPath: document.uri.fsPath,
+      originalText,
+      proposedText,
+      summary: String(parsed.summary || 'Diagnostic fix proposal'),
+      confidence: String(parsed.confidence || ''),
+      verification: parsed.verification,
+      model: ai.model
+    });
+    return true;
+  } catch (error) {
+    aiEditState.running = false;
+    aiEditState.error = error?.message || 'Unable to create a safe fix proposal.';
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    vscode.window.showWarningMessage('Galaxy AI Fix: ' + aiEditState.error);
+    return false;
+  }
+}
+
+async function refactorSelectedCodeProposal() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    vscode.window.showInformationMessage('Select code first, then choose Refactor Selection.');
+    return false;
+  }
+
+  const document = editor.document;
+  const selection = editor.selection;
+  const selectedText = document.getText(selection);
+  aiEditState.running = true;
+  aiEditState.kind = 'refactor-selection';
+  aiEditState.error = '';
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const prompt = [
+    'Refactor the selected ' + document.languageId + ' code for clarity and maintainability without changing intended behavior.',
+    'Return ONLY JSON: {"summary":"...","confidence":"high|medium|low","verification":["..."],"replacement":"..."}',
+    'Do not wrap replacement in Markdown fences.',
+    '',
+    selectedText.slice(0, 12000)
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a conservative refactoring assistant. Preserve behavior and return valid JSON only.'
+  );
+
+  try {
+    if (!ai.ok) throw new Error(ai.error || 'No AI model response.');
+    const parsed = extractJsonObject(ai.text);
+    const replacement = String(parsed.replacement ?? '');
+    if (!replacement) throw new Error('AI returned an empty replacement.');
+
+    const originalText = document.getText();
+    const startOffset = document.offsetAt(selection.start);
+    const endOffset = document.offsetAt(selection.end);
+    const proposedText =
+      originalText.slice(0, startOffset) +
+      replacement +
+      originalText.slice(endOffset);
+
+    await saveAiEditProposal({
+      kind: 'refactor-selection',
+      sourceUri: document.uri.toString(),
+      targetPath: document.uri.fsPath,
+      originalText,
+      proposedText,
+      summary: String(parsed.summary || 'Refactor proposal'),
+      confidence: String(parsed.confidence || ''),
+      verification: parsed.verification,
+      model: ai.model
+    });
+    return true;
+  } catch (error) {
+    aiEditState.running = false;
+    aiEditState.error = error?.message || 'Unable to create refactor proposal.';
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    vscode.window.showWarningMessage('Galaxy AI Refactor: ' + aiEditState.error);
+    return false;
+  }
+}
+
+function detectTestFramework(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return 'unknown';
+  const packageJson = readJsonIfExists(path.join(root, 'package.json')) || {};
+  const deps = {
+    ...(packageJson.dependencies || {}),
+    ...(packageJson.devDependencies || {})
+  };
+  if (deps.vitest) return 'Vitest';
+  if (deps.jest) return 'Jest';
+  if (deps['@playwright/test']) return 'Playwright';
+  if (deps.mocha) return 'Mocha';
+  if (deps.jasmine) return 'Jasmine';
+  return packageJson.scripts?.test ? 'project test script' : 'unknown';
+}
+
+async function generateTestsProposal(extensionUri) {
+  const editor = vscode.window.activeTextEditor;
+  const root = getWorkspaceRoot(extensionUri);
+  if (!editor || editor.document.uri.scheme !== 'file' || !root) {
+    vscode.window.showInformationMessage('Open a project source file first.');
+    return false;
+  }
+
+  const document = editor.document;
+  const relativeSource = path.relative(root, document.uri.fsPath);
+  if (!relativeSource || relativeSource.startsWith('..')) {
+    vscode.window.showWarningMessage('Active file is outside the current workspace.');
+    return false;
+  }
+
+  aiEditState.running = true;
+  aiEditState.kind = 'generate-tests';
+  aiEditState.error = '';
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const framework = detectTestFramework(extensionUri);
+  const prompt = [
+    'Generate focused tests for this source file.',
+    'Detected test framework: ' + framework,
+    'Source path: ' + relativeSource,
+    'Language: ' + document.languageId,
+    'Return ONLY JSON: {"summary":"...","confidence":"high|medium|low","verification":["..."],"relativePath":"path/to/test-file","content":"..."}',
+    'Use a workspace-relative path. Do not use .. or an absolute path.',
+    'Prefer the detected framework. If framework is unknown, state assumptions in summary.',
+    '',
+    truncatePromptText(document.getText(), 14000)
+  ].join('\n');
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a practical test engineer. Generate deterministic tests and return valid JSON only.'
+  );
+
+  try {
+    if (!ai.ok) throw new Error(ai.error || 'No AI model response.');
+    const parsed = extractJsonObject(ai.text);
+    const relativePath = String(parsed.relativePath || '').replace(/\\/g, '/').trim();
+    const content = String(parsed.content || '');
+    if (!relativePath || !content) throw new Error('AI did not return a test file proposal.');
+    if (path.isAbsolute(relativePath) || relativePath.split('/').includes('..')) {
+      throw new Error('AI proposed an unsafe test file path.');
+    }
+
+    const targetPath = path.resolve(root, relativePath);
+    if (!targetPath.startsWith(path.resolve(root) + path.sep)) {
+      throw new Error('AI proposed a path outside the workspace.');
+    }
+    if (fs.existsSync(targetPath)) {
+      throw new Error('Proposed test file already exists. Refusing to overwrite it.');
+    }
+
+    await saveAiEditProposal({
+      kind: 'generate-tests',
+      sourceUri: document.uri.toString(),
+      targetPath,
+      originalText: '',
+      proposedText: content,
+      summary: String(parsed.summary || 'Generated test proposal'),
+      confidence: String(parsed.confidence || ''),
+      verification: parsed.verification,
+      model: ai.model
+    });
+    return true;
+  } catch (error) {
+    aiEditState.running = false;
+    aiEditState.error = error?.message || 'Unable to create test proposal.';
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    vscode.window.showWarningMessage('Galaxy AI Tests: ' + aiEditState.error);
+    return false;
+  }
+}
+
+async function reviewAiEditProposal() {
+  if (!aiEditState.proposalId || !aiEditState.proposedText) {
+    vscode.window.showInformationMessage('Generate an AI edit proposal first.');
+    return false;
+  }
+
+  const proposalId = aiEditState.proposalId;
+  const originalUri = [...aiPreviewDocuments.keys()]
+    .map((value) => vscode.Uri.parse(value))
+    .find((uri) => uri.path.includes('/original/' + proposalId));
+  const proposedUri = [...aiPreviewDocuments.keys()]
+    .map((value) => vscode.Uri.parse(value))
+    .find((uri) => uri.path.includes('/proposed/' + proposalId));
+
+  if (!originalUri || !proposedUri) return false;
+
+  const label = aiEditState.kind === 'generate-tests'
+    ? 'New Test File Preview'
+    : 'Galaxy AI Fix · Review Before Apply';
+
+  await vscode.commands.executeCommand('vscode.diff', originalUri, proposedUri, label);
+  return true;
+}
+
+async function applyAiEditProposal() {
+  if (!aiEditState.proposalId || !aiEditState.proposedText) {
+    vscode.window.showInformationMessage('No AI edit proposal is ready.');
+    return false;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Apply this reviewed Galaxy AI proposal?',
+    { modal: true },
+    'Apply'
+  );
+  if (confirm !== 'Apply') return false;
+
+  if (aiEditState.kind === 'generate-tests') {
+    if (fs.existsSync(aiEditState.targetPath)) {
+      vscode.window.showWarningMessage('Target test file now exists. Proposal was not applied.');
+      return false;
+    }
+
+    const targetUri = vscode.Uri.file(aiEditState.targetPath);
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(aiEditState.targetPath)));
+    await vscode.workspace.fs.writeFile(
+      targetUri,
+      Buffer.from(aiEditState.proposedText, 'utf8')
+    );
+
+    const document = await vscode.workspace.openTextDocument(targetUri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    vscode.window.showInformationMessage('Galaxy AI test file created.');
+    clearAiEditProposal();
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    return true;
+  }
+
+  if (!aiEditState.sourceUri) return false;
+
+  const uri = vscode.Uri.parse(aiEditState.sourceUri);
+  const document = await vscode.workspace.openTextDocument(uri);
+  if (document.getText() !== aiEditState.originalText) {
+    vscode.window.showWarningMessage(
+      'The source file changed after the AI proposal was generated. Regenerate the proposal before applying.'
+    );
+    return false;
+  }
+
+  const edit = new vscode.WorkspaceEdit();
+  const fullRange = new vscode.Range(
+    new vscode.Position(0, 0),
+    document.positionAt(document.getText().length)
+  );
+  edit.replace(uri, fullRange, aiEditState.proposedText);
+
+  const applied = await vscode.workspace.applyEdit(edit);
+  if (!applied) {
+    vscode.window.showErrorMessage('VS Code could not apply the AI proposal.');
+    return false;
+  }
+
+  await vscode.window.showTextDocument(document, { preview: false });
+  vscode.window.showInformationMessage('Galaxy AI proposal applied as unsaved editor changes.');
+  clearAiEditProposal();
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return true;
+}
+
+async function discardAiEditProposal() {
+  clearAiEditProposal();
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return true;
+}
 
 async function requestGalaxyModel(prompt, systemInstruction = '') {
   const models =
