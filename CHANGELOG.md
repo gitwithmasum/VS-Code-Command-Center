@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.0
+
+- Added AI Fix Studio with safe proposal, diff review, and explicit apply workflow.
+- Added diagnostic-based AI code-fix proposals.
+- Added selected-code refactor proposals.
+- Added AI-generated test-file proposals with existing-file overwrite protection.
+- Added immutable original/proposed virtual documents for diff review.
+- Added stale-source protection so changed files cannot receive outdated AI proposals.
+- AI proposals are never applied automatically.
+
+
 ## 2.6.0
 
 - Added Smart Developer Assistant for test, build, lint, and typecheck workflows.
