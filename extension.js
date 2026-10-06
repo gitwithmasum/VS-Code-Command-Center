@@ -9,6 +9,11 @@ const {
   readJsonIfExists,
   createWorkspaceTerminal
 } = require('./src/core/workspace');
+const {
+  runGit,
+  remoteToWebUrl,
+  detectRemoteProvider
+} = require('./src/core/git');
 
 let lastEditorContext = {
   fileName: '',
@@ -140,19 +145,6 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-function runGit(cwd, args) {
-  try {
-    return execFileSync('git', ['-C', cwd, ...args], {
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
-  } catch {
-    return '';
-  }
-}
-
-
 function runVersionCommand(command, args = []) {
   try {
     return execFileSync(command, args, {
@@ -213,37 +205,6 @@ async function getDevServerStatus() {
     ports,
     primaryUrl: ports.length ? `http://localhost:${ports[0]}` : ''
   };
-}
-
-function remoteToWebUrl(remoteUrl) {
-  const raw = String(remoteUrl || '').trim();
-  if (!raw) return '';
-
-  const scpMatch = raw.match(/^git@([^:]+):(.+)$/);
-  if (scpMatch) {
-    return `https://${scpMatch[1]}/${scpMatch[2].replace(/\.git$/i, '')}`;
-  }
-
-  const sshMatch = raw.match(/^ssh:\/\/git@([^/]+)\/(.+)$/);
-  if (sshMatch) {
-    return `https://${sshMatch[1]}/${sshMatch[2].replace(/\.git$/i, '')}`;
-  }
-
-  if (/^https?:\/\//i.test(raw)) {
-    return raw.replace(/\.git$/i, '');
-  }
-
-  return '';
-}
-
-function detectRemoteProvider(remoteUrl) {
-  const value = String(remoteUrl || '').toLowerCase();
-  if (!value) return 'Local only';
-  if (value.includes('github.com')) return 'GitHub';
-  if (value.includes('gitlab.com')) return 'GitLab';
-  if (value.includes('bitbucket.org')) return 'Bitbucket';
-  if (value.includes('dev.azure.com') || value.includes('visualstudio.com')) return 'Azure DevOps';
-  return 'Git Remote';
 }
 
 function githubApi(pathname, token) {
@@ -788,9 +749,9 @@ async function getGitState(extensionUri) {
     if (workTreeState !== ' ') unstaged++;
   }
 
-  const lastCommitRaw = runGit(cwd, ['log', '-1', '--pretty=format:%h|%s|%cr']);
+  const lastCommitRaw = runGit(cwd, ['log', '-1', '--pretty=format:%h%x09%s%x09%cr']);
   const [lastCommitHash = '', lastCommitSubject = '', lastCommitWhen = ''] =
-    lastCommitRaw ? lastCommitRaw.split('|') : [];
+    lastCommitRaw ? lastCommitRaw.split('\t') : [];
 
   let sync = 'Local';
   const upstream = runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
