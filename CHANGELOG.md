@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.9.0
+
+- Added Galaxy CP Arena.
+- Added local contest countdown and A–H problem tracking with per-problem active time.
+- Added problem states for Solving, WA, TLE, RE, AC, and reset.
+- Added Local Sample Judge for C/C++, Python, and JavaScript.
+- Added gcc/g++ native compile support, execution timeout, runtime measurement, output comparison, and verdict reporting.
+- Added C++ / Python competitive-programming snippet vault.
+- Added AI Complexity and AI Edge Case tools.
+- Added Panic Assist with three escalating hints instead of a copy-paste final solution.
+- Added CP Focus Mode and platform shortcuts for Codeforces, AtCoder, LeetCode, and CodeChef.
+- Preserved the last active source-file context so CP tools continue to work while the dashboard webview is focused.
+- Added the CP feature module to the prepublish syntax gate.
+
+
 ## 2.8.1
 
 - Began modular cleanup by extracting workspace/runtime helpers and Git helpers into `src/core`.
