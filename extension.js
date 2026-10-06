@@ -3633,6 +3633,51 @@ function getDashboardHtml(state) {
       vscode.postMessage({ command: 'rerunGitHubAction', value: button.dataset.rerunAction });
     });
   });
+
+  document.querySelectorAll('[data-focus-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'focusTimerAction', value: button.dataset.focusAction });
+    });
+  });
+
+  document.querySelectorAll('[data-debug-open]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openDebugDiagnostic', value: button.dataset.debugOpen });
+    });
+  });
+
+  document.querySelectorAll('[data-debug-fix]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'openDebugQuickFix', value: button.dataset.debugFix });
+    });
+  });
+
+  const focusClock = document.getElementById('galaxyFocusClock');
+  if (focusClock) {
+    const formatClock = (milliseconds) => {
+      const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+    };
+
+    const running = focusClock.dataset.running === '1';
+    const endAt = Number(focusClock.dataset.endAt || 0);
+    const initialRemaining = Number(focusClock.dataset.remaining || 0);
+
+    const updateClock = () => {
+      const remaining = running && endAt
+        ? Math.max(0, endAt - Date.now())
+        : initialRemaining;
+      focusClock.textContent = formatClock(remaining);
+    };
+
+    updateClock();
+    if (running && endAt) {
+      setInterval(updateClock, 1000);
+    }
+  }
 </script>
 </body>
 </html>`;
@@ -3714,6 +3759,26 @@ async function runAction(command, value, context) {
       return openPullRequestReviewCenter(context?.extensionUri);
     case 'safeCommitPush':
       return safeCommitAndPush(context?.extensionUri);
+    case 'setCodingGoal':
+      return setDailyCodingGoal(context);
+    case 'focusTimerAction':
+      if (value === '25') return startFocusTimer(context, 25);
+      if (value === '50') return startFocusTimer(context, 50);
+      if (value === 'custom') return startCustomFocusTimer(context);
+      if (value === 'pause') return pauseFocusTimer(context);
+      if (value === 'resume') return resumeFocusTimer(context);
+      if (value === 'stop') return stopFocusTimer(context);
+      return false;
+    case 'analyzeDebug':
+      return analyzeLatestDiagnostic(context);
+    case 'toggleAutoDebug':
+      return toggleAutoDebugAnalyze(context);
+    case 'copyDebugAnalysis':
+      return copyDebugAnalysis();
+    case 'openDebugDiagnostic':
+      return openDebugDiagnostic(value);
+    case 'openDebugQuickFix':
+      return openDebugQuickFix(value);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -3817,6 +3882,27 @@ async function runAction(command, value, context) {
   }
 }
 
+
+function updateGalaxyStatusBar(context, statusItem) {
+  if (!statusItem) return;
+
+  const history = getCodingHistoryState(context);
+  const timer = getFocusTimerState(context);
+
+  if (timer.running && timer.remainingMs > 0) {
+    statusItem.text = '$(clock) Galaxy ' + formatTimerClock(timer.remainingMs);
+    statusItem.tooltip =
+      'Focus timer running · Today ' + history.activeText +
+      ' / ' + history.goalText;
+    return;
+  }
+
+  statusItem.text =
+    '$(rocket) Galaxy ' + history.activeText + '/' + history.goalText;
+  statusItem.tooltip =
+    'Today coding goal: ' + history.goalPercent + '% complete';
+}
+
 class GalaxySidebarProvider {
   constructor(extensionUri, context) {
     this.extensionUri = extensionUri;
@@ -3905,6 +3991,14 @@ async function openDashboard(context) {
       panel.webview.html = getDashboardHtml(state);
     };
 
+    dashboardRenderCallback = render;
+
+    panel.onDidDispose(() => {
+      if (dashboardRenderCallback === render) {
+        dashboardRenderCallback = null;
+      }
+    });
+
     panel.webview.onDidReceiveMessage(async (message) => {
       if (message.command === 'refresh') {
         await render();
@@ -3942,7 +4036,11 @@ async function openDashboard(context) {
         message.command === 'createGitTag' ||
         message.command === 'createDraftRelease' ||
         message.command === 'rerunGitHubAction' ||
-        message.command === 'safeCommitPush'
+        message.command === 'safeCommitPush' ||
+        message.command === 'setCodingGoal' ||
+        message.command === 'focusTimerAction' ||
+        message.command === 'analyzeDebug' ||
+        message.command === 'toggleAutoDebug'
       ) {
         await render();
       }
@@ -3966,12 +4064,14 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((event) => {
       captureEditorContext(event.textEditor, true);
+      lastCodingActivityAt = Date.now();
     })
   );
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       captureEditorContext(editor, true);
+      lastCodingActivityAt = Date.now();
       if (editor?.document?.uri?.scheme === 'file') {
         sessionTouchedFiles.add(editor.document.uri.fsPath);
       }
@@ -3982,6 +4082,8 @@ async function activate(context) {
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
         sessionTouchedFiles.add(event.document.uri.fsPath);
+        lastCodingActivityAt = Date.now();
+        void recordCodingEdit(context, event.document);
       }
     })
   );
@@ -3991,6 +4093,8 @@ async function activate(context) {
       if (document.uri.scheme === 'file') {
         sessionTouchedFiles.add(document.uri.fsPath);
         sessionSaveCount++;
+        lastCodingActivityAt = Date.now();
+        void recordCodingSave(context, document);
       }
     })
   );
@@ -3998,6 +4102,19 @@ async function activate(context) {
   if (vscode.window.activeTextEditor?.document?.uri?.scheme === 'file') {
     sessionTouchedFiles.add(vscode.window.activeTextEditor.document.uri.fsPath);
   }
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeWindowState((state) => {
+      galaxyWindowFocused = state.focused;
+      if (state.focused) lastCodingActivityAt = Date.now();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.languages.onDidChangeDiagnostics(() => {
+      scheduleAutoDebug(context);
+    })
+  );
 
   await rememberCurrentProject(context);
 
@@ -4060,6 +4177,25 @@ async function activate(context) {
   statusItem.command = 'galaxyCommandCenter.open';
   statusItem.show();
   context.subscriptions.push(statusItem);
+
+  updateGalaxyStatusBar(context, statusItem);
+
+  const galaxyHeartbeat = setInterval(() => {
+    const now = Date.now();
+    const elapsed = Math.min(30000, Math.max(0, now - lastCodingTickAt));
+    lastCodingTickAt = now;
+
+    void recordCodingActivity(context, elapsed);
+    void checkFocusTimerCompletion(context);
+    updateGalaxyStatusBar(context, statusItem);
+  }, 15000);
+
+  context.subscriptions.push({
+    dispose() {
+      clearInterval(galaxyHeartbeat);
+      if (autoDebugTimer) clearTimeout(autoDebugTimer);
+    }
+  });
 
   if (context.extensionMode === vscode.ExtensionMode.Development) {
     await openDashboard(context);
