@@ -170,6 +170,20 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Quick links for Codeforces, AtCoder, LeetCode, and CodeChef
 - CP session state is stored locally in VS Code; no database is required
 
+## CP Advanced Judge — v2.9.1
+
+- Multi Test Case Runner using `---` as the case separator
+- Optional expected outputs for run-only multi-case practice
+- Compile once and reuse the same runner across a multi-case suite
+- Verdict history for sample, multi-case, and stress-test runs
+- Automatic WA / TLE / RE / CE problem-state tracking from local judge failures
+- Official AC remains explicit because passing samples is not the same as an online-judge acceptance
+- Stress Test workflow: current file = optimized solution, then choose generator + brute solution
+- Up to 100 stress iterations with failing input and brute-vs-optimized output shown on mismatch
+- C++17, Python 3, and JavaScript starter templates
+- One-click New Problem File with a safe Save As flow
+- Contest timing hardening when the timer expires before a problem switch
+
 ## Planned modules
 
 - Project Launcher
