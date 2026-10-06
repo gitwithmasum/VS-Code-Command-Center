@@ -210,9 +210,12 @@ async function switchProblem(context, label) {
     previous &&
     session.problems[previous]
   ) {
+    const effectiveNow = session.contest.endAt
+      ? Math.min(now, Number(session.contest.endAt))
+      : now;
     session.problems[previous].activeMs += Math.max(
       0,
-      now - session.problemStartedAt
+      effectiveNow - session.problemStartedAt
     );
   }
 
@@ -500,7 +503,10 @@ function splitCases(value) {
 
 async function runMultipleCases(document, rawInputs, rawExpected) {
   const inputs = splitCases(rawInputs).slice(0, 20);
-  const expected = splitCases(rawExpected).slice(0, 20);
+  const expectedText = String(rawExpected || '').trim();
+  const expected = expectedText
+    ? splitCases(rawExpected).slice(0, 20)
+    : Array(inputs.length).fill('');
 
   if (expected.length !== inputs.length) {
     return {
