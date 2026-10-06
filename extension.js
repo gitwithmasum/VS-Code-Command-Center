@@ -66,6 +66,25 @@ let aiEditState = {
 
 const aiPreviewDocuments = new Map();
 
+let qualityGateState = {
+  running: false,
+  status: 'NOT RUN',
+  score: 0,
+  errors: 0,
+  warnings: 0,
+  conflicts: 0,
+  checks: [],
+  beforeErrors: null,
+  afterErrors: null,
+  dependency: null,
+  coverage: null,
+  lastRunAt: 0,
+  message: ''
+};
+
+let lastAiApplyBackup = null;
+let activeDiagnosticSignatures = new Set();
+
 let githubStateCache = {
   at: 0,
   value: null
@@ -2252,6 +2271,445 @@ function renderGalaxyExtensions(extensions) {
 }
 
 
+
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getCoverageState(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return null;
+
+  const summaryPath = path.join(root, 'coverage', 'coverage-summary.json');
+  if (!fs.existsSync(summaryPath)) return null;
+
+  try {
+    const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+    const total = summary.total || {};
+    const value = (key) => {
+      const pct = Number(total[key]?.pct);
+      return Number.isFinite(pct) ? pct : null;
+    };
+    return {
+      lines: value('lines'),
+      statements: value('statements'),
+      functions: value('functions'),
+      branches: value('branches')
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getTopRecurringErrors(context) {
+  const stored = context?.globalState.get('galaxy.errorRecurrence', {}) || {};
+  return Object.values(stored)
+    .sort((a, b) => Number(b.count || 0) - Number(a.count || 0))
+    .slice(0, 5);
+}
+
+async function updateErrorRecurrence(context) {
+  if (!context) return;
+
+  const current = collectDebugDiagnostics()
+    .filter((item) => item.severity === 'Error');
+  const nextSignatures = new Set(current.map((item) => diagnosticSignature(item)));
+
+  const newlySeen = current.filter(
+    (item) => !activeDiagnosticSignatures.has(diagnosticSignature(item))
+  );
+
+  activeDiagnosticSignatures = nextSignatures;
+  if (!newlySeen.length) return;
+
+  const stored = context.globalState.get('galaxy.errorRecurrence', {}) || {};
+  for (const item of newlySeen) {
+    const key = [
+      item.file,
+      item.source || '',
+      item.code || '',
+      item.message
+    ].join('|');
+
+    const record = stored[key] || {
+      key,
+      file: item.file,
+      message: item.message,
+      source: item.source || '',
+      code: item.code || '',
+      count: 0,
+      lastSeenAt: 0
+    };
+
+    record.count = Number(record.count || 0) + 1;
+    record.lastSeenAt = Date.now();
+    stored[key] = record;
+  }
+
+  const trimmed = Object.fromEntries(
+    Object.entries(stored)
+      .sort(([, a], [, b]) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
+      .slice(0, 100)
+  );
+
+  await context.globalState.update('galaxy.errorRecurrence', trimmed);
+}
+
+async function runVerificationScript(extensionUri, task) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return null;
+
+  const taskState = getSmartTaskScripts(extensionUri);
+  const executable =
+    taskState.packageManager === 'pnpm'
+      ? (process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+      : taskState.packageManager === 'yarn'
+        ? (process.platform === 'win32' ? 'yarn.cmd' : 'yarn')
+        : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+
+  const args =
+    taskState.packageManager === 'yarn'
+      ? [task.script]
+      : ['run', task.script];
+
+  const result = await runCapturedProcess(executable, args, root, 120000);
+  return {
+    kind: task.kind,
+    script: task.script,
+    exitCode: result.exitCode,
+    passed: result.exitCode === 0,
+    output: normalizeTaskOutput(result.stdout, result.stderr).slice(-5000)
+  };
+}
+
+function calculateQualityGate({ errors, warnings, conflicts, checks, dependency }) {
+  let score = 100;
+
+  score -= Math.min(errors * 20, 60);
+  score -= Math.min(warnings * 2, 12);
+  if (conflicts > 0) score -= 30;
+
+  const failedChecks = checks.filter((item) => !item.passed).length;
+  score -= Math.min(failedChecks * 15, 45);
+
+  if (dependency?.critical > 0) score -= 25;
+  else if (dependency?.high > 0) score -= 15;
+  else if (dependency?.moderate > 0) score -= 5;
+
+  score = Math.max(0, Math.min(100, score));
+
+  let status = 'READY';
+  if (errors > 0 || conflicts > 0 || failedChecks > 0 || dependency?.critical > 0) {
+    status = 'BLOCKED';
+  } else if (warnings > 0 || dependency?.high > 0 || dependency?.moderate > 0 || score < 90) {
+    status = 'REVIEW';
+  }
+
+  return { score, status };
+}
+
+async function runQualityGate(context, extensionUri, options = {}) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showWarningMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  qualityGateState = {
+    ...qualityGateState,
+    running: true,
+    status: 'RUNNING',
+    checks: [],
+    beforeErrors:
+      Number.isInteger(options.beforeErrors)
+        ? options.beforeErrors
+        : qualityGateState.beforeErrors,
+    message: ''
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  await sleep(500);
+
+  const taskState = getSmartTaskScripts(extensionUri);
+  const orderedKinds = ['lint', 'typecheck', 'test', 'build'];
+  const selectedTasks = orderedKinds
+    .map((kind) => taskState.available.find((item) => item.kind === kind))
+    .filter(Boolean);
+
+  const checks = [];
+  for (const task of selectedTasks) {
+    const result = await runVerificationScript(extensionUri, task);
+    if (result) checks.push(result);
+  }
+
+  await sleep(400);
+
+  const diagnostics = collectDebugDiagnostics();
+  const errors = diagnostics.filter((item) => item.severity === 'Error').length;
+  const warnings = diagnostics.filter((item) => item.severity === 'Warning').length;
+  const conflicts = runGit(root, ['diff', '--name-only', '--diff-filter=U'])
+    .split(/\r?\n/)
+    .filter(Boolean).length;
+
+  const dependency = qualityGateState.dependency;
+  const coverage = getCoverageState(extensionUri);
+  const result = calculateQualityGate({
+    errors,
+    warnings,
+    conflicts,
+    checks,
+    dependency
+  });
+
+  qualityGateState = {
+    ...qualityGateState,
+    running: false,
+    status: result.status,
+    score: result.score,
+    errors,
+    warnings,
+    conflicts,
+    checks,
+    afterErrors: errors,
+    coverage,
+    lastRunAt: Date.now(),
+    message:
+      result.status === 'READY'
+        ? 'All available quality checks passed.'
+        : result.status === 'REVIEW'
+          ? 'Checks passed with warnings or review items.'
+          : 'One or more blocking quality checks failed.'
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  vscode.window.showInformationMessage(
+    'Galaxy Quality Gate: ' + result.status + ' · ' + result.score + '/100'
+  );
+  return result.status === 'READY';
+}
+
+async function scanDependencies(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  if (!fs.existsSync(path.join(root, 'package.json'))) {
+    vscode.window.showInformationMessage('Dependency scan currently supports Node projects with package.json.');
+    return false;
+  }
+
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  qualityGateState = {
+    ...qualityGateState,
+    running: true,
+    message: 'Scanning npm dependency risk…'
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const audit = await runCapturedProcess(
+    npmCommand,
+    ['audit', '--json'],
+    root,
+    90000
+  );
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse((audit.stdout || audit.stderr || '{}').trim() || '{}');
+  } catch {
+    parsed = null;
+  }
+
+  const vulnerabilities = parsed?.metadata?.vulnerabilities || {};
+  const dependency = {
+    critical: Number(vulnerabilities.critical || 0),
+    high: Number(vulnerabilities.high || 0),
+    moderate: Number(vulnerabilities.moderate || 0),
+    low: Number(vulnerabilities.low || 0),
+    total: Number(vulnerabilities.total || 0),
+    scannedAt: Date.now(),
+    error:
+      parsed
+        ? ''
+        : 'npm audit output could not be parsed.'
+  };
+
+  qualityGateState = {
+    ...qualityGateState,
+    running: false,
+    dependency,
+    message:
+      dependency.total > 0
+        ? 'Dependency scan found ' + dependency.total + ' vulnerability report(s).'
+        : 'Dependency scan found no reported vulnerabilities.'
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return true;
+}
+
+function getQualityGateState(context, extensionUri) {
+  return {
+    ...qualityGateState,
+    coverage: qualityGateState.coverage || getCoverageState(extensionUri),
+    recurringErrors: getTopRecurringErrors(context),
+    canRollback: Boolean(lastAiApplyBackup)
+  };
+}
+
+async function revertLastAiApply() {
+  if (!lastAiApplyBackup) {
+    vscode.window.showInformationMessage('No AI apply backup is available to revert.');
+    return false;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Revert the last Galaxy AI Apply?',
+    { modal: true },
+    'Revert'
+  );
+  if (confirm !== 'Revert') return false;
+
+  const backup = lastAiApplyBackup;
+
+  if (backup.kind === 'created-file') {
+    if (!fs.existsSync(backup.targetPath)) {
+      lastAiApplyBackup = null;
+      return false;
+    }
+
+    const current = fs.readFileSync(backup.targetPath, 'utf8');
+    if (current !== backup.appliedText) {
+      vscode.window.showWarningMessage(
+        'The generated file changed after AI Apply, so rollback was blocked.'
+      );
+      return false;
+    }
+
+    await vscode.workspace.fs.delete(vscode.Uri.file(backup.targetPath));
+    lastAiApplyBackup = null;
+    vscode.window.showInformationMessage('Last Galaxy AI-created file was removed.');
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    return true;
+  }
+
+  if (backup.kind === 'edited-file') {
+    const uri = vscode.Uri.parse(backup.sourceUri);
+    const document = await vscode.workspace.openTextDocument(uri);
+    if (document.getText() !== backup.appliedText) {
+      vscode.window.showWarningMessage(
+        'The file changed after AI Apply, so rollback was blocked.'
+      );
+      return false;
+    }
+
+    const edit = new vscode.WorkspaceEdit();
+    const fullRange = new vscode.Range(
+      new vscode.Position(0, 0),
+      document.positionAt(document.getText().length)
+    );
+    edit.replace(uri, fullRange, backup.originalText);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (!applied) return false;
+
+    if (backup.saved) {
+      await document.save();
+    }
+
+    lastAiApplyBackup = null;
+    vscode.window.showInformationMessage('Last Galaxy AI Apply was reverted.');
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+    return true;
+  }
+
+  return false;
+}
+
+async function smartCommitGate(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+
+  const fresh =
+    qualityGateState.lastRunAt &&
+    Date.now() - qualityGateState.lastRunAt < 15 * 60 * 1000 &&
+    qualityGateState.status === 'READY';
+
+  if (!fresh) {
+    const ready = await runQualityGate(context, extensionUri);
+    if (!ready) {
+      vscode.window.showWarningMessage('Quality Gate is not READY. Commit was blocked.');
+      return false;
+    }
+  }
+
+  const staged = runGit(root, ['diff', '--cached', '--no-ext-diff', '--unified=3']);
+  if (!staged) {
+    vscode.window.showInformationMessage('Stage changes before using Smart Commit Gate.');
+    return false;
+  }
+
+  const ai = await requestGalaxyModel(
+    [
+      'Generate one concise conventional commit message for this staged diff.',
+      'Return only the commit message, with an optional short body after a blank line.',
+      '',
+      truncatePromptText(staged, 12000)
+    ].join('\n'),
+    'Act as a precise Git commit-message writer. Do not include Markdown fences.'
+  );
+
+  if (!ai.ok || !ai.text.trim()) {
+    vscode.window.showWarningMessage(ai.error || 'Unable to generate a commit message.');
+    return false;
+  }
+
+  const message = await vscode.window.showInputBox({
+    title: 'Smart Commit Gate',
+    prompt: 'Review or edit the AI-generated commit message',
+    value: ai.text.trim().slice(0, 4000)
+  });
+  if (!message?.trim()) return false;
+
+  const confirm = await vscode.window.showInformationMessage(
+    'Quality Gate is READY. Create this commit now?',
+    { modal: true },
+    'Commit'
+  );
+  if (confirm !== 'Commit') return false;
+
+  return runGitLocal(
+    root,
+    ['commit', '-m', message.trim()],
+    'Smart Commit created after Quality Gate.'
+  ) !== null;
+}
+
+function renderQualityChecks(checks) {
+  if (!checks.length) {
+    return '<p class="muted">No test/lint/typecheck/build scripts were available for the latest gate.</p>';
+  }
+
+  return checks.map((item) =>
+    '<div class="quality-check ' + (item.passed ? 'pass' : 'fail') + '">' +
+      '<span>' + (item.passed ? 'PASS' : 'FAIL') + '</span>' +
+      '<strong>' + escapeHtml(item.kind) + '</strong>' +
+      '<small>' + escapeHtml(item.script) + '</small>' +
+    '</div>'
+  ).join('');
+}
+
+function renderRecurringErrors(items) {
+  if (!items.length) {
+    return '<p class="muted">No recurring errors recorded yet.</p>';
+  }
+
+  return items.map((item) =>
+    '<div class="history-row"><div><strong>' + escapeHtml(item.file) +
+    '</strong><small>' + escapeHtml(item.message) +
+    '</small></div><span>×' + Number(item.count || 0) + '</span></div>'
+  ).join('');
+}
 
 class GalaxyAiPreviewProvider {
   provideTextDocumentContent(uri) {
