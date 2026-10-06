@@ -25,6 +25,17 @@ let lastCodingTickAt = Date.now();
 let galaxyWindowFocused = true;
 let focusTimerCompletionKey = '';
 
+let debugAssistantState = {
+  analyzing: false,
+  analysis: '',
+  model: '',
+  lastSignature: '',
+  lastError: ''
+};
+let autoDebugTimer = null;
+let lastAutoDebugAt = 0;
+let dashboardRenderCallback = null;
+
 let githubStateCache = {
   at: 0,
   value: null
@@ -2121,6 +2132,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'modes', label: 'Developer Modes' },
   { id: 'themes', label: 'Theme Matrix' },
   { id: 'ai', label: 'AI HUD' },
+  { id: 'debug', label: 'AI Debug Assistant' },
   { id: 'notes', label: 'Project Notes' },
   { id: 'session', label: 'Coding Session Stats' },
   { id: 'focus', label: 'Coding Focus + History' },
@@ -2212,6 +2224,294 @@ function getAiHudState() {
     lastPrompt: lastAiPrompt,
     lastPromptKind: lastAiPromptKind
   };
+}
+
+
+function collectDebugDiagnostics() {
+  const root = getWorkspaceRoot();
+  if (!root) return [];
+
+  const activeUri = vscode.window.activeTextEditor?.document?.uri?.toString() || '';
+  const items = [];
+
+  for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
+    if (uri.scheme !== 'file') continue;
+    if (!uri.fsPath.startsWith(root)) continue;
+
+    for (const diagnostic of diagnostics) {
+      if (
+        diagnostic.severity !== vscode.DiagnosticSeverity.Error &&
+        diagnostic.severity !== vscode.DiagnosticSeverity.Warning
+      ) {
+        continue;
+      }
+
+      const code =
+        typeof diagnostic.code === 'object'
+          ? String(diagnostic.code?.value || '')
+          : String(diagnostic.code || '');
+
+      items.push({
+        uri: uri.toString(),
+        file: path.relative(root, uri.fsPath) || path.basename(uri.fsPath),
+        line: diagnostic.range.start.line + 1,
+        character: diagnostic.range.start.character + 1,
+        endLine: diagnostic.range.end.line + 1,
+        severity: diagnostic.severity === vscode.DiagnosticSeverity.Error ? 'Error' : 'Warning',
+        message: diagnostic.message || '',
+        source: diagnostic.source || '',
+        code,
+        active: uri.toString() === activeUri
+      });
+    }
+  }
+
+  return items
+    .sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      if (a.severity !== b.severity) return a.severity === 'Error' ? -1 : 1;
+      if (a.file !== b.file) return a.file.localeCompare(b.file);
+      return a.line - b.line;
+    })
+    .slice(0, 20);
+}
+
+function diagnosticSignature(item) {
+  if (!item) return '';
+  return [item.uri, item.line, item.character, item.severity, item.message].join('|');
+}
+
+async function buildDiagnosticCodeContext(item) {
+  if (!item?.uri) return '';
+  try {
+    const uri = vscode.Uri.parse(item.uri);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const targetLine = Math.max(0, Number(item.line || 1) - 1);
+    const start = Math.max(0, targetLine - 5);
+    const end = Math.min(document.lineCount - 1, targetLine + 5);
+    const lines = [];
+
+    for (let index = start; index <= end; index++) {
+      const marker = index === targetLine ? '>>' : '  ';
+      lines.push(marker + ' ' + String(index + 1).padStart(4, ' ') + ' | ' + document.lineAt(index).text);
+    }
+
+    return lines.join('\n').slice(0, 7000);
+  } catch {
+    return '';
+  }
+}
+
+function getDebugAssistantState(context) {
+  const diagnostics = collectDebugDiagnostics();
+  const errors = diagnostics.filter((item) => item.severity === 'Error').length;
+  const warnings = diagnostics.filter((item) => item.severity === 'Warning').length;
+
+  return {
+    diagnostics,
+    errors,
+    warnings,
+    autoAnalyze: Boolean(context?.globalState.get('galaxy.autoDebugAnalyze', false)),
+    analyzing: debugAssistantState.analyzing,
+    analysis: debugAssistantState.analysis,
+    model: debugAssistantState.model,
+    lastError: debugAssistantState.lastError
+  };
+}
+
+async function analyzeLatestDiagnostic(context, options = {}) {
+  const diagnostics = collectDebugDiagnostics();
+  const target =
+    diagnostics.find((item) => item.severity === 'Error') ||
+    diagnostics[0];
+
+  if (!target) {
+    if (!options.silent) {
+      vscode.window.showInformationMessage('Galaxy Debug: no current errors or warnings detected.');
+    }
+    return false;
+  }
+
+  const signature = diagnosticSignature(target);
+  debugAssistantState.analyzing = true;
+  debugAssistantState.lastError = '';
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const codeContext = await buildDiagnosticCodeContext(target);
+  const prompt = [
+    'You are the Galaxy AI Debug Assistant inside VS Code.',
+    'Analyze this diagnostic and give a concise practical solution.',
+    'Return these sections: Cause, Fix, Example (only when useful), Verify.',
+    'Do not invent files, APIs, or dependencies that are not shown.',
+    '',
+    'File: ' + target.file,
+    'Location: line ' + target.line + ', column ' + target.character,
+    'Severity: ' + target.severity,
+    'Source: ' + (target.source || 'VS Code'),
+    'Code: ' + (target.code || 'n/a'),
+    'Diagnostic: ' + target.message,
+    '',
+    'Nearby code:',
+    codeContext || '[code context unavailable]'
+  ].join('\n');
+
+  try {
+    const models =
+      vscode.lm && typeof vscode.lm.selectChatModels === 'function'
+        ? await vscode.lm.selectChatModels()
+        : [];
+
+    if (!models.length) {
+      debugAssistantState.analysis =
+        'No VS Code language model is currently available. Open VS Code Chat or configure a compatible language model, then run Analyze Error again.\n\nDiagnostic:\n' +
+        target.message;
+      debugAssistantState.model = 'No model';
+      debugAssistantState.lastSignature = signature;
+      lastAiPrompt = prompt;
+      lastAiPromptKind = 'debug';
+      return false;
+    }
+
+    const model = models[0];
+    const messages = [
+      vscode.LanguageModelChatMessage.User(
+        'Act as a careful debugging assistant. Prefer the smallest safe fix and explain uncertainty.'
+      ),
+      vscode.LanguageModelChatMessage.User(prompt)
+    ];
+
+    const cts = new vscode.CancellationTokenSource();
+    let responseText = '';
+
+    try {
+      const response = await model.sendRequest(messages, {}, cts.token);
+      for await (const fragment of response.text) {
+        responseText += fragment;
+        if (responseText.length >= 14000) break;
+      }
+    } finally {
+      cts.dispose();
+    }
+
+    debugAssistantState.analysis =
+      responseText.trim() || 'The model returned an empty debugging response.';
+    debugAssistantState.model =
+      model.name || model.family || model.id || 'VS Code Language Model';
+    debugAssistantState.lastSignature = signature;
+    debugAssistantState.lastError = '';
+    lastAutoDebugAt = Date.now();
+    return true;
+  } catch (error) {
+    debugAssistantState.analysis = '';
+    debugAssistantState.model = '';
+    debugAssistantState.lastSignature = signature;
+    debugAssistantState.lastError =
+      error?.message || 'AI debugging request failed.';
+    if (!options.silent) {
+      vscode.window.showErrorMessage('Galaxy AI Debug: ' + debugAssistantState.lastError);
+    }
+    return false;
+  } finally {
+    debugAssistantState.analyzing = false;
+    if (dashboardRenderCallback) await dashboardRenderCallback();
+  }
+}
+
+async function toggleAutoDebugAnalyze(context) {
+  if (!context) return false;
+  const current = Boolean(context.globalState.get('galaxy.autoDebugAnalyze', false));
+  const next = !current;
+  await context.globalState.update('galaxy.autoDebugAnalyze', next);
+
+  if (next) {
+    vscode.window.showInformationMessage(
+      'Galaxy Auto Debug enabled. New diagnostics may send a small code snippet to your configured VS Code language model.'
+    );
+    await analyzeLatestDiagnostic(context, { silent: true });
+  } else {
+    if (autoDebugTimer) {
+      clearTimeout(autoDebugTimer);
+      autoDebugTimer = null;
+    }
+    vscode.window.showInformationMessage('Galaxy Auto Debug disabled.');
+  }
+  return true;
+}
+
+function scheduleAutoDebug(context) {
+  if (!context?.globalState.get('galaxy.autoDebugAnalyze', false)) return;
+
+  const diagnostics = collectDebugDiagnostics();
+  const target =
+    diagnostics.find((item) => item.severity === 'Error') ||
+    diagnostics[0];
+  if (!target) return;
+
+  const signature = diagnosticSignature(target);
+  if (signature === debugAssistantState.lastSignature) return;
+  if (Date.now() - lastAutoDebugAt < 30000) return;
+
+  if (autoDebugTimer) clearTimeout(autoDebugTimer);
+  autoDebugTimer = setTimeout(async () => {
+    autoDebugTimer = null;
+    await analyzeLatestDiagnostic(context, { silent: true });
+  }, 2500);
+}
+
+async function openDebugDiagnostic(index) {
+  const diagnostics = collectDebugDiagnostics();
+  const item = diagnostics[Number(index)];
+  if (!item?.uri) return false;
+
+  try {
+    const uri = vscode.Uri.parse(item.uri);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const line = Math.max(0, Number(item.line || 1) - 1);
+    const character = Math.max(0, Number(item.character || 1) - 1);
+    const position = new vscode.Position(line, character);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openDebugQuickFix(index) {
+  const opened = await openDebugDiagnostic(index);
+  if (!opened) return false;
+  await vscode.commands.executeCommand('editor.action.quickFix');
+  return true;
+}
+
+async function copyDebugAnalysis() {
+  if (!debugAssistantState.analysis) {
+    vscode.window.showInformationMessage('Run Analyze Error first.');
+    return false;
+  }
+  await vscode.env.clipboard.writeText(debugAssistantState.analysis);
+  vscode.window.showInformationMessage('Galaxy AI debug analysis copied.');
+  return true;
+}
+
+function renderDebugDiagnostics(items) {
+  if (!items.length) {
+    return '<p class="muted">No errors or warnings detected in the current workspace.</p>';
+  }
+
+  return items.slice(0, 8).map((item, index) =>
+    '<div class="debug-row">' +
+      '<button class="debug-main" data-debug-open="' + index + '">' +
+        '<span class="' + (item.severity === 'Error' ? 'debug-error' : 'debug-warning') + '">' +
+          escapeHtml(item.severity) +
+        '</span>' +
+        '<div><strong>' + escapeHtml(item.file) + ':' + item.line + '</strong>' +
+        '<small>' + escapeHtml(item.message) + '</small></div>' +
+      '</button>' +
+      '<button data-debug-fix="' + index + '">Quick Fix</button>' +
+    '</div>'
+  ).join('');
 }
 
 function truncatePromptText(value, limit = 12000) {
@@ -2407,6 +2707,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     advancedRepo: getAdvancedRepoState(extensionUri),
     recentFiles,
     ai: getAiHudState(),
+    debugAssistant: context ? getDebugAssistantState(context) : null,
     projectNote: context ? getProjectNote(context, extensionUri) : '',
     session: getSessionStats(),
     codingHistory: context ? getCodingHistoryState(context) : null,
