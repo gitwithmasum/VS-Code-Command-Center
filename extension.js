@@ -125,7 +125,7 @@ function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
   lastEditorContext.fileName = editor.document.fileName || '';
-  lastEditorContext.languageId = editor.document.languageId || '';
+  lastEditorContext.languageId = document.languageId || '';
   lastEditorContext.uri = editor.document.uri.toString();
 
   if (!editor.selection.isEmpty) {
@@ -1660,7 +1660,7 @@ async function recordCodingActivity(context, elapsedMs) {
   const root = getWorkspaceRoot();
   if (!root) return;
 
-  const language = editor.document.languageId || 'unknown';
+  const language = document.languageId || 'unknown';
   const filePath = editor.document.uri.fsPath;
   const relative = path.relative(root, filePath) || path.basename(filePath);
   const project = path.basename(root);
@@ -2261,6 +2261,36 @@ function sleep(ms) {
 }
 
 
+
+async function getCpSourceDocument() {
+  const active = vscode.window.activeTextEditor?.document;
+  if (active?.uri?.scheme === 'file') return active;
+
+  if (lastEditorContext.uri) {
+    try {
+      const uri = vscode.Uri.parse(lastEditorContext.uri);
+      if (uri.scheme === 'file') {
+        return await vscode.workspace.openTextDocument(uri);
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function getCpEditableEditor() {
+  const active = vscode.window.activeTextEditor;
+  if (active?.document?.uri?.scheme === 'file') return active;
+
+  const document = await getCpSourceDocument();
+  if (!document) return null;
+
+  return vscode.window.showTextDocument(document, {
+    preview: false,
+    preserveFocus: false
+  });
+}
+
 async function startCpContestPrompt(context) {
   const value = await vscode.window.showInputBox({
     title: 'Galaxy CP Arena · New Contest',
@@ -2317,14 +2347,14 @@ async function resetCpArenaAction(context) {
 }
 
 async function runCpSampleAction(context, value) {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.uri.scheme !== 'file') {
+  const document = await getCpSourceDocument();
+  if (!document || document.uri.scheme !== 'file') {
     vscode.window.showInformationMessage('Open a C/C++, Python, or JavaScript source file first.');
     return false;
   }
 
-  if (editor.document.isDirty) {
-    const saved = await editor.document.save();
+  if (document.isDirty) {
+    const saved = await document.save();
     if (!saved) {
       vscode.window.showWarningMessage('Save the source file before running a CP sample.');
       return false;
@@ -2335,7 +2365,7 @@ async function runCpSampleAction(context, value) {
   const expected = String(value?.expected || '').slice(0, 20000);
 
   vscode.window.setStatusBarMessage('Galaxy CP · Running sample…', 2200);
-  const run = await runCurrentFile(editor.document, input, expected);
+  const run = await runCurrentFile(document, input, expected);
   run.input = input;
   await saveLastRun(context, run);
 
@@ -2352,13 +2382,13 @@ async function runCpSampleAction(context, value) {
 }
 
 async function openCpSnippetVault() {
-  const editor = vscode.window.activeTextEditor;
+  const editor = await getCpEditableEditor();
   if (!editor) {
     vscode.window.showInformationMessage('Open a source file first.');
     return false;
   }
 
-  const snippets = getCpSnippets(editor.document.languageId);
+  const snippets = getCpSnippets(document.languageId);
   const selected = await vscode.window.showQuickPick(
     snippets.map((item) => ({
       label: item.label,
@@ -2380,16 +2410,18 @@ async function openCpSnippetVault() {
 }
 
 async function runCpAi(kind) {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.uri.scheme !== 'file') {
+  const document = await getCpSourceDocument();
+  if (!document || document.uri.scheme !== 'file') {
     vscode.window.showInformationMessage('Open a source file first.');
     return false;
   }
 
-  const selected = editor.selection.isEmpty
-    ? ''
-    : editor.document.getText(editor.selection);
-  const source = selected || editor.document.getText();
+  const cached = getBestEditorContext();
+  const selected =
+    cached.uri === document.uri.toString()
+      ? String(cached.selectedText || '')
+      : '';
+  const source = selected || document.getText();
 
   cpAiState = {
     running: true,
@@ -2409,7 +2441,7 @@ async function runCpAi(kind) {
       'Return: Time Complexity, Space Complexity, Why, Bottleneck, and whether it is likely safe for common constraints such as 1e5 or 1e6.',
       'State uncertainty when input constraints are missing.',
       '',
-      'Language: ' + editor.document.languageId,
+      'Language: ' + document.languageId,
       selected ? 'Context: selected code' : 'Context: current file',
       '',
       truncatePromptText(source, 14000)
@@ -2422,7 +2454,7 @@ async function runCpAi(kind) {
       'Focus on boundaries, duplicates, sorted/reversed data, zero/one-element cases, overflow, disconnected cases, and algorithm-specific traps when relevant.',
       'Return a concise numbered list with why each case matters. Include concrete sample inputs only when the input format is inferable from the code.',
       '',
-      'Language: ' + editor.document.languageId,
+      'Language: ' + document.languageId,
       '',
       truncatePromptText(source, 14000)
     ].join('\n');
