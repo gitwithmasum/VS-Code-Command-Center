@@ -2168,6 +2168,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'smartDeveloper', label: 'Smart Developer Assistant' },
   { id: 'aiFix', label: 'AI Fix Studio' },
   { id: 'quality', label: 'Quality Gate + Auto Verify' },
+  { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
   { id: 'modes', label: 'Developer Modes' },
@@ -4512,6 +4513,28 @@ function widgetAttr(state, id) {
     : ' data-widget="' + id + '"';
 }
 
+
+function renderCpProblems(problems) {
+  return (problems || []).map((item) => {
+    const statusClass =
+      item.status === 'AC' ? 'cp-ac' :
+      ['WA', 'TLE', 'RE'].includes(item.status) ? 'cp-fail' :
+      item.status === 'SOLVING' ? 'cp-solving' : '';
+
+    return '<button class="cp-problem ' + statusClass + (item.current ? ' active' : '') +
+      '" data-cp-problem="' + escapeHtml(item.label) + '">' +
+      '<span class="cp-letter">' + escapeHtml(item.label) + '</span>' +
+      '<strong>' + escapeHtml(item.status) + '</strong>' +
+      '<small>' + escapeHtml(item.activeText) +
+      (item.attempts ? ' · ' + item.attempts + ' fail' + (item.attempts === 1 ? '' : 's') : '') +
+      '</small></button>';
+  }).join('');
+}
+
+function getCpAiState() {
+  return { ...cpAiState };
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -4544,6 +4567,8 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     smartAssistant: getSmartAssistantState(extensionUri),
     aiEdit: getAiEditState(),
     qualityGate: getQualityGateState(context, extensionUri),
+    cpArena: context ? getCpArenaState(context) : null,
+    cpAi: getCpAiState(),
     recentFiles,
     ai: getAiHudState(),
     debugAssistant: context ? getDebugAssistantState(context) : null,
@@ -4737,6 +4762,30 @@ function getDashboardHtml(state) {
   .coverage-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
   .coverage-grid div{padding:9px;border:1px solid rgba(0,247,255,.08);border-radius:9px}
   .coverage-grid span{display:block;color:var(--muted);font-size:9px;margin-bottom:4px}
+  .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .cp-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .cp-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .cp-stat strong{font-size:16px}
+  .cp-clock{font-family:Consolas,'Courier New',monospace;color:var(--cyan);letter-spacing:.05em}
+  .cp-problems{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px;margin-bottom:12px}
+  .cp-problem{display:flex;flex-direction:column;gap:4px;text-align:left;min-width:0}
+  .cp-problem.active{border-color:var(--cyan);background:rgba(0,247,255,.08);box-shadow:0 0 18px rgba(0,247,255,.1)}
+  .cp-problem.cp-ac{border-color:rgba(100,255,180,.45)}
+  .cp-problem.cp-fail{border-color:rgba(255,107,138,.42)}
+  .cp-problem.cp-solving{border-color:rgba(255,204,102,.42)}
+  .cp-letter{font-size:18px;font-weight:800;color:var(--cyan)}
+  .cp-problem small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cp-status-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
+  .cp-runner{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+  .cp-run-panel{padding:12px;border:1px solid rgba(139,92,255,.15);border-radius:12px;background:rgba(139,92,255,.02)}
+  .cp-run-panel textarea{width:100%;min-height:150px;resize:vertical;background:rgba(0,0,0,.28);color:var(--text);border:1px solid rgba(0,247,255,.13);border-radius:10px;padding:10px;font-family:Consolas,'Courier New',monospace;line-height:1.45}
+  .cp-result{margin-top:12px;padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,0,0,.2)}
+  .cp-output{white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto;font-family:Consolas,'Courier New',monospace;font-size:11px;line-height:1.5}
+  .cp-tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .cp-platforms{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .cp-ai-result{margin-top:12px;padding:14px;border:1px solid rgba(255,79,216,.16);border-radius:12px;background:rgba(255,79,216,.02);white-space:pre-wrap;line-height:1.55;max-height:360px;overflow:auto}
   .git-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
   .git-box{padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
   .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
@@ -4851,7 +4900,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -5102,6 +5151,108 @@ function getDashboardHtml(state) {
       </div>
 
       <p class="muted" style="margin:12px 0 0">READY means no blocking diagnostics/conflicts and all available verification scripts passed. Dependency scan is explicit because npm audit may use the network.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'cpArena')}>
+      <div class="cp-arena-head">
+        <div>
+          <div class="label">GALAXY CP ARENA</div>
+          <h3 style="margin-bottom:4px">Contest cockpit · local judge · AI coach</h3>
+          <div class="muted">C/C++, Python, and JavaScript sample runner. Contest/problem history stays in VS Code local storage.</div>
+        </div>
+        <div class="cp-actions">
+          <button data-command="cpStartContest"><span>▶</span>New Contest</button>
+          <button data-command="cpStopContest"><span>■</span>Stop</button>
+          <button data-command="cpFocusMode"><span>◎</span>CP Focus</button>
+          <button data-command="cpResetArena"><span>↺</span>Reset</button>
+        </div>
+      </div>
+
+      <div class="cp-summary">
+        <div class="cp-stat">
+          <span>CONTEST</span>
+          <strong
+            class="cp-clock"
+            id="cpContestClock"
+            data-running="${state.cpArena.contest.running ? '1' : '0'}"
+            data-end-at="${Number(state.cpArena.contest.endAt || 0)}"
+            data-remaining="${Number(state.cpArena.contest.remainingMs || 0)}"
+          >${escapeHtml(state.cpArena.contest.remainingText)}</strong>
+        </div>
+        <div class="cp-stat"><span>SOLVED</span><strong>${state.cpArena.solved} / ${state.cpArena.total}</strong></div>
+        <div class="cp-stat"><span>CURRENT</span><strong>${escapeHtml(state.cpArena.currentProblem)}</strong></div>
+        <div class="cp-stat">
+          <span>PROBLEM TIME</span>
+          <strong
+            class="cp-clock"
+            id="cpProblemClock"
+            data-running="${state.cpArena.contest.running ? '1' : '0'}"
+            data-current-ms="${Number(state.cpArena.problems.find((item) => item.current)?.activeMs || 0)}"
+          >${escapeHtml(state.cpArena.currentProblemTime)}</strong>
+        </div>
+        <div class="cp-stat"><span>LAST VERDICT</span><strong>${escapeHtml(state.cpArena.lastRun?.verdict || '—')}</strong></div>
+      </div>
+
+      <div class="project-group-title">PROBLEM TRACKER · CLICK A PROBLEM TO SWITCH</div>
+      <div class="cp-problems">${renderCpProblems(state.cpArena.problems)}</div>
+
+      <div class="project-group-title">CURRENT PROBLEM ${escapeHtml(state.cpArena.currentProblem)} · VERDICT / STATE</div>
+      <div class="cp-status-actions">
+        <button data-cp-status="SOLVING">Solving</button>
+        <button data-cp-status="WA">WA</button>
+        <button data-cp-status="TLE">TLE</button>
+        <button data-cp-status="RE">RE</button>
+        <button data-cp-status="AC">AC ✓</button>
+        <button data-cp-status="NOT STARTED">Reset Status</button>
+      </div>
+
+      <div class="project-group-title">LOCAL SAMPLE JUDGE</div>
+      <div class="cp-runner">
+        <div class="cp-run-panel">
+          <strong>Sample Input</strong>
+          <textarea id="cpSampleInput" spellcheck="false" placeholder="Paste sample input here...">${escapeHtml(state.cpArena.lastRun?.input || '')}</textarea>
+        </div>
+        <div class="cp-run-panel">
+          <strong>Expected Output</strong>
+          <textarea id="cpSampleExpected" spellcheck="false" placeholder="Paste expected output here...">${escapeHtml(state.cpArena.lastRun?.expected || '')}</textarea>
+        </div>
+      </div>
+      <div class="cp-tools">
+        <button data-cp-run-sample="1"><span>▶</span>Compile / Run Sample</button>
+        <button data-command="cpSnippetVault"><span>⌘</span>Snippet Vault</button>
+        <button data-command="cpAiComplexity"><span>O()</span>Complexity</button>
+        <button data-command="cpAiEdgeCases"><span>◇</span>Edge Cases</button>
+        <button data-command="cpPanicAssist"><span>!</span>Panic Assist</button>
+      </div>
+
+      ${state.cpArena.lastRun ? '<div class="cp-result">' +
+        '<div class="commit-line"><strong>' + escapeHtml(state.cpArena.lastRun.verdict) +
+        '</strong> · ' + Number(state.cpArena.lastRun.runtimeMs || 0) + ' ms · Problem ' +
+        escapeHtml(state.cpArena.lastRun.problem || state.cpArena.currentProblem) + '</div>' +
+        '<div class="project-group-title" style="margin-top:10px">ACTUAL OUTPUT</div>' +
+        '<div class="cp-output">' + escapeHtml(state.cpArena.lastRun.stdout || '[no stdout]') + '</div>' +
+        (state.cpArena.lastRun.stderr
+          ? '<div class="project-group-title" style="margin-top:10px">STDERR</div><div class="cp-output">' +
+            escapeHtml(state.cpArena.lastRun.stderr) + '</div>'
+          : '') +
+        '</div>' : ''}
+
+      <div class="project-group-title" style="margin-top:14px">CP AI COACH</div>
+      ${state.cpAi.running
+        ? '<div class="cp-ai-result">Analyzing…</div>'
+        : state.cpAi.error
+          ? '<div class="cp-ai-result"><strong>AI error</strong>\n\n' + escapeHtml(state.cpAi.error) + '</div>'
+          : state.cpAi.result
+            ? '<div class="cp-ai-result">' + escapeHtml(state.cpAi.result) + '</div>'
+            : '<p class="muted">Complexity and edge-case tools analyze the selected code, or the current file when nothing is selected. Panic Assist reads a copied problem statement and returns hints instead of a full solution.</p>'}
+
+      <div class="project-group-title" style="margin-top:14px">PLATFORMS</div>
+      <div class="cp-platforms">
+        <button data-cp-platform="codeforces">Codeforces ↗</button>
+        <button data-cp-platform="atcoder">AtCoder ↗</button>
+        <button data-cp-platform="leetcode">LeetCode ↗</button>
+        <button data-cp-platform="codechef">CodeChef ↗</button>
+      </div>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'git')}>
