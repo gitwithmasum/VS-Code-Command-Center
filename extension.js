@@ -2336,6 +2336,7 @@ async function runCpSampleAction(context, value) {
 
   vscode.window.setStatusBarMessage('Galaxy CP · Running sample…', 2200);
   const run = await runCurrentFile(editor.document, input, expected);
+  run.input = input;
   await saveLastRun(context, run);
 
   if (run.verdict === 'PASS') {
@@ -5838,6 +5839,73 @@ function getDashboardHtml(state) {
     });
   });
 
+  document.querySelectorAll('[data-cp-problem]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'cpSwitchProblem', value: button.dataset.cpProblem });
+    });
+  });
+
+  document.querySelectorAll('[data-cp-status]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'cpSetStatus', value: button.dataset.cpStatus });
+    });
+  });
+
+  document.querySelectorAll('[data-cp-platform]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'cpPlatform', value: button.dataset.cpPlatform });
+    });
+  });
+
+  document.querySelectorAll('[data-cp-run-sample]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById('cpSampleInput')?.value || '';
+      const expected = document.getElementById('cpSampleExpected')?.value || '';
+      vscode.postMessage({
+        command: 'cpRunSample',
+        value: { input, expected }
+      });
+    });
+  });
+
+  const cpFormatClock = (milliseconds) => {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours
+      ? [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
+      : [minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+  };
+
+  const cpContestClock = document.getElementById('cpContestClock');
+  if (cpContestClock) {
+    const running = cpContestClock.dataset.running === '1';
+    const endAt = Number(cpContestClock.dataset.endAt || 0);
+    const initialRemaining = Number(cpContestClock.dataset.remaining || 0);
+    const updateCpContestClock = () => {
+      const remaining = running && endAt
+        ? Math.max(0, endAt - Date.now())
+        : initialRemaining;
+      cpContestClock.textContent = cpFormatClock(remaining);
+    };
+    updateCpContestClock();
+    if (running && endAt) setInterval(updateCpContestClock, 1000);
+  }
+
+  const cpProblemClock = document.getElementById('cpProblemClock');
+  if (cpProblemClock) {
+    const running = cpProblemClock.dataset.running === '1';
+    const baseMs = Number(cpProblemClock.dataset.currentMs || 0);
+    const openedAt = Date.now();
+    const updateCpProblemClock = () => {
+      const value = running ? baseMs + Math.max(0, Date.now() - openedAt) : baseMs;
+      cpProblemClock.textContent = cpFormatClock(value);
+    };
+    updateCpProblemClock();
+    if (running) setInterval(updateCpProblemClock, 1000);
+  }
+
   const focusClock = document.getElementById('galaxyFocusClock');
   if (focusClock) {
     const formatClock = (milliseconds) => {
@@ -5997,6 +6065,30 @@ async function runAction(command, value, context) {
       return revertLastAiApply();
     case 'smartCommitGate':
       return smartCommitGate(context, context?.extensionUri);
+    case 'cpStartContest':
+      return startCpContestPrompt(context);
+    case 'cpStopContest':
+      return stopCpContestAction(context);
+    case 'cpResetArena':
+      return resetCpArenaAction(context);
+    case 'cpSwitchProblem':
+      return switchProblem(context, value);
+    case 'cpSetStatus':
+      return setProblemStatus(context, value);
+    case 'cpRunSample':
+      return runCpSampleAction(context, value);
+    case 'cpSnippetVault':
+      return openCpSnippetVault();
+    case 'cpAiComplexity':
+      return runCpAi('complexity');
+    case 'cpAiEdgeCases':
+      return runCpAi('edge-cases');
+    case 'cpPanicAssist':
+      return runCpPanicAssist();
+    case 'cpFocusMode':
+      return toggleCpFocusMode();
+    case 'cpPlatform':
+      return openCpPlatform(value);
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -6275,7 +6367,16 @@ async function openDashboard(context) {
         message.command === 'revertLastAiApply' ||
         message.command === 'smartCommitGate' ||
         message.command === 'runTerminal' ||
-        message.command === 'runVsCodeCommand'
+        message.command === 'runVsCodeCommand' ||
+        message.command === 'cpStartContest' ||
+        message.command === 'cpStopContest' ||
+        message.command === 'cpResetArena' ||
+        message.command === 'cpSwitchProblem' ||
+        message.command === 'cpSetStatus' ||
+        message.command === 'cpRunSample' ||
+        message.command === 'cpAiComplexity' ||
+        message.command === 'cpAiEdgeCases' ||
+        message.command === 'cpPanicAssist'
       ) {
         await render();
       }
@@ -6430,6 +6531,7 @@ async function activate(context) {
 
     void recordCodingActivity(context, elapsed);
     void checkFocusTimerCompletion(context);
+    void checkCpContestCompletion(context);
     updateGalaxyStatusBar(context, statusItem);
   }, 15000);
 
