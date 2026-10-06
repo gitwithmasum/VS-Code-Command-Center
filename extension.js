@@ -14,6 +14,17 @@ const {
   remoteToWebUrl,
   detectRemoteProvider
 } = require('./src/core/git');
+const {
+  getCpArenaState,
+  startNewContest,
+  stopContest,
+  switchProblem,
+  setProblemStatus,
+  resetCpSession,
+  runCurrentFile,
+  saveLastRun,
+  getCpSnippets
+} = require('./src/features/cp');
 
 let lastEditorContext = {
   fileName: '',
@@ -94,6 +105,14 @@ let qualityGateState = {
 
 let lastAiApplyBackup = null;
 let activeDiagnosticSignatures = new Set();
+
+let cpAiState = {
+  running: false,
+  kind: '',
+  result: '',
+  model: '',
+  error: ''
+};
 
 let githubStateCache = {
   at: 0,
@@ -2238,6 +2257,264 @@ function renderGalaxyExtensions(extensions) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
+async function startCpContestPrompt(context) {
+  const value = await vscode.window.showInputBox({
+    title: 'Galaxy CP Arena · New Contest',
+    prompt: 'Contest duration in minutes',
+    value: '120',
+    validateInput: (input) => {
+      const minutes = Number(input);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 720) {
+        return 'Enter a number between 1 and 720 minutes.';
+      }
+      return undefined;
+    }
+  });
+
+  if (value === undefined) return false;
+
+  const current = getCpArenaState(context);
+  const hasActivity =
+    current.contest.running ||
+    current.problems.some((item) => item.status !== 'NOT STARTED');
+
+  if (hasActivity) {
+    const confirm = await vscode.window.showWarningMessage(
+      'Starting a new CP contest resets the current problem tracker.',
+      { modal: true },
+      'Start New Contest'
+    );
+    if (confirm !== 'Start New Contest') return false;
+  }
+
+  await startNewContest(context, Number(value));
+  vscode.window.showInformationMessage(
+    'Galaxy CP contest started for ' + Number(value) + ' minutes.'
+  );
+  return true;
+}
+
+async function stopCpContestAction(context) {
+  await stopContest(context);
+  vscode.window.showInformationMessage('Galaxy CP contest timer stopped.');
+  return true;
+}
+
+async function resetCpArenaAction(context) {
+  const confirm = await vscode.window.showWarningMessage(
+    'Reset the current Galaxy CP Arena session?',
+    { modal: true },
+    'Reset'
+  );
+  if (confirm !== 'Reset') return false;
+  await resetCpSession(context);
+  cpAiState = { running: false, kind: '', result: '', model: '', error: '' };
+  return true;
+}
+
+async function runCpSampleAction(context, value) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') {
+    vscode.window.showInformationMessage('Open a C/C++, Python, or JavaScript source file first.');
+    return false;
+  }
+
+  if (editor.document.isDirty) {
+    const saved = await editor.document.save();
+    if (!saved) {
+      vscode.window.showWarningMessage('Save the source file before running a CP sample.');
+      return false;
+    }
+  }
+
+  const input = String(value?.input || '').slice(0, 20000);
+  const expected = String(value?.expected || '').slice(0, 20000);
+
+  vscode.window.setStatusBarMessage('Galaxy CP · Running sample…', 2200);
+  const run = await runCurrentFile(editor.document, input, expected);
+  await saveLastRun(context, run);
+
+  if (run.verdict === 'PASS') {
+    vscode.window.showInformationMessage(
+      'Galaxy CP: sample passed in ' + run.runtimeMs + ' ms.'
+    );
+  } else {
+    vscode.window.showWarningMessage(
+      'Galaxy CP: ' + run.verdict + ' · ' + run.runtimeMs + ' ms.'
+    );
+  }
+  return true;
+}
+
+async function openCpSnippetVault() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showInformationMessage('Open a source file first.');
+    return false;
+  }
+
+  const snippets = getCpSnippets(editor.document.languageId);
+  const selected = await vscode.window.showQuickPick(
+    snippets.map((item) => ({
+      label: item.label,
+      description: item.detail,
+      snippet: item.code
+    })),
+    {
+      title: 'Galaxy CP Snippet Vault',
+      placeHolder: 'Choose a competitive-programming snippet'
+    }
+  );
+
+  if (!selected) return false;
+
+  await editor.edit((builder) => {
+    builder.replace(editor.selection, selected.snippet);
+  });
+  return true;
+}
+
+async function runCpAi(kind) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') {
+    vscode.window.showInformationMessage('Open a source file first.');
+    return false;
+  }
+
+  const selected = editor.selection.isEmpty
+    ? ''
+    : editor.document.getText(editor.selection);
+  const source = selected || editor.document.getText();
+
+  cpAiState = {
+    running: true,
+    kind,
+    result: '',
+    model: '',
+    error: ''
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  let prompt = '';
+  let instruction = '';
+
+  if (kind === 'complexity') {
+    prompt = [
+      'Analyze the time and space complexity of this competitive-programming code.',
+      'Return: Time Complexity, Space Complexity, Why, Bottleneck, and whether it is likely safe for common constraints such as 1e5 or 1e6.',
+      'State uncertainty when input constraints are missing.',
+      '',
+      'Language: ' + editor.document.languageId,
+      selected ? 'Context: selected code' : 'Context: current file',
+      '',
+      truncatePromptText(source, 14000)
+    ].join('\n');
+    instruction =
+      'Act as a competitive-programming coach. Be mathematically precise and do not invent constraints.';
+  } else if (kind === 'edge-cases') {
+    prompt = [
+      'Generate high-value edge cases for this competitive-programming solution.',
+      'Focus on boundaries, duplicates, sorted/reversed data, zero/one-element cases, overflow, disconnected cases, and algorithm-specific traps when relevant.',
+      'Return a concise numbered list with why each case matters. Include concrete sample inputs only when the input format is inferable from the code.',
+      '',
+      'Language: ' + editor.document.languageId,
+      '',
+      truncatePromptText(source, 14000)
+    ].join('\n');
+    instruction =
+      'Act as a competitive-programming test designer. Do not pretend to know an input format that is not visible.';
+  }
+
+  const ai = await requestGalaxyModel(prompt, instruction);
+  cpAiState = {
+    running: false,
+    kind,
+    result: ai.text,
+    model: ai.model,
+    error: ai.error
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function runCpPanicAssist() {
+  const statement = (await vscode.env.clipboard.readText()).trim();
+  if (!statement) {
+    vscode.window.showInformationMessage(
+      'Copy the problem statement first, then use CP Panic Assist.'
+    );
+    return false;
+  }
+
+  cpAiState = {
+    running: true,
+    kind: 'panic',
+    result: '',
+    model: '',
+    error: ''
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const ai = await requestGalaxyModel(
+    [
+      'A competitive-programming contestant is stuck on this problem.',
+      'Do NOT give a full final solution or complete implementation.',
+      'Give exactly three escalating hints:',
+      'Hint 1: direction / observation only.',
+      'Hint 2: likely algorithm or data structure.',
+      'Hint 3: pseudocode-level strategy and important edge cases.',
+      'Also mention the likely target complexity if it can be inferred.',
+      '',
+      truncatePromptText(statement, 12000)
+    ].join('\n'),
+    'Act as a competitive-programming coach. Preserve the learning value and avoid giving a copy-paste final answer.'
+  );
+
+  cpAiState = {
+    running: false,
+    kind: 'panic',
+    result: ai.text,
+    model: ai.model,
+    error: ai.error
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function toggleCpFocusMode() {
+  const commands = await vscode.commands.getCommands(true);
+  if (!commands.includes('workbench.action.toggleZenMode')) {
+    vscode.window.showInformationMessage('VS Code Zen Mode is unavailable.');
+    return false;
+  }
+  await vscode.commands.executeCommand('workbench.action.toggleZenMode');
+  return true;
+}
+
+async function openCpPlatform(platform) {
+  const urls = {
+    codeforces: 'https://codeforces.com/',
+    atcoder: 'https://atcoder.jp/',
+    leetcode: 'https://leetcode.com/',
+    codechef: 'https://www.codechef.com/'
+  };
+  const url = urls[String(platform || '').toLowerCase()];
+  if (!url) return false;
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+  return true;
+}
+
+async function checkCpContestCompletion(context) {
+  const state = getCpArenaState(context);
+  if (!state.contest.running || state.contest.remainingMs > 0) return;
+  await stopContest(context);
+  vscode.window.showWarningMessage('Galaxy CP contest time is up.');
+  if (dashboardRenderCallback) await dashboardRenderCallback();
 }
 
 function getCoverageState(extensionUri) {
