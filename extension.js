@@ -20,6 +20,11 @@ const sessionTouchedFiles = new Set();
 let sessionCommandCount = 0;
 let sessionSaveCount = 0;
 
+let lastCodingActivityAt = Date.now();
+let lastCodingTickAt = Date.now();
+let galaxyWindowFocused = true;
+let focusTimerCompletionKey = '';
+
 let githubStateCache = {
   at: 0,
   value: null
@@ -145,8 +150,8 @@ async function getDevServerStatus() {
   };
 }
 
-function getWorkspaceRoot(extensionUri) {
-  return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || extensionUri?.fsPath || '';
+function getWorkspaceRoot() {
+  return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
 }
 
 
@@ -1565,6 +1570,376 @@ function renderThemeMatrix(themeState) {
 
 
 
+
+function localDayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
+
+function formatCompactDuration(ms) {
+  const totalMinutes = Math.max(0, Math.floor(Number(ms || 0) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours && minutes) return hours + 'h ' + minutes + 'm';
+  if (hours) return hours + 'h';
+  return minutes + 'm';
+}
+
+function trimCodingHistory(history, keepDays = 30) {
+  const keys = Object.keys(history || {}).sort().reverse();
+  const keep = new Set(keys.slice(0, keepDays));
+  const next = {};
+  for (const key of keys) {
+    if (keep.has(key)) next[key] = history[key];
+  }
+  return next;
+}
+
+function getTodayCodingRecord(context) {
+  const history = context?.globalState.get('galaxy.codingHistory', {}) || {};
+  const key = localDayKey();
+  return history[key] || {
+    activeMs: 0,
+    edits: 0,
+    saves: 0,
+    files: {},
+    languages: {},
+    projects: {}
+  };
+}
+
+async function recordCodingActivity(context, elapsedMs) {
+  if (!context || elapsedMs <= 0) return;
+
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') return;
+  if (!galaxyWindowFocused) return;
+  if (Date.now() - lastCodingActivityAt > 120000) return;
+
+  const root = getWorkspaceRoot();
+  if (!root) return;
+
+  const language = editor.document.languageId || 'unknown';
+  const filePath = editor.document.uri.fsPath;
+  const relative = path.relative(root, filePath) || path.basename(filePath);
+  const project = path.basename(root);
+
+  let history = context.globalState.get('galaxy.codingHistory', {}) || {};
+  const key = localDayKey();
+  const day = history[key] || {
+    activeMs: 0,
+    edits: 0,
+    saves: 0,
+    files: {},
+    languages: {},
+    projects: {}
+  };
+
+  day.activeMs = Number(day.activeMs || 0) + elapsedMs;
+  day.languages = day.languages || {};
+  day.languages[language] = Number(day.languages[language] || 0) + elapsedMs;
+
+  day.projects = day.projects || {};
+  day.projects[project] = Number(day.projects[project] || 0) + elapsedMs;
+
+  day.files = day.files || {};
+  const file = day.files[relative] || {
+    language,
+    activeMs: 0,
+    edits: 0,
+    saves: 0
+  };
+  file.language = language;
+  file.activeMs = Number(file.activeMs || 0) + elapsedMs;
+  day.files[relative] = file;
+
+  history[key] = day;
+  history = trimCodingHistory(history);
+  await context.globalState.update('galaxy.codingHistory', history);
+}
+
+async function recordCodingEdit(context, document) {
+  if (!context || !document || document.uri.scheme !== 'file') return;
+  const root = getWorkspaceRoot();
+  if (!root || !document.uri.fsPath.startsWith(root)) return;
+
+  lastCodingActivityAt = Date.now();
+
+  let history = context.globalState.get('galaxy.codingHistory', {}) || {};
+  const key = localDayKey();
+  const day = history[key] || {
+    activeMs: 0,
+    edits: 0,
+    saves: 0,
+    files: {},
+    languages: {},
+    projects: {}
+  };
+
+  const relative = path.relative(root, document.uri.fsPath) || path.basename(document.uri.fsPath);
+  const language = document.languageId || 'unknown';
+  const file = day.files?.[relative] || {
+    language,
+    activeMs: 0,
+    edits: 0,
+    saves: 0
+  };
+
+  file.language = language;
+  file.edits = Number(file.edits || 0) + 1;
+  day.files = day.files || {};
+  day.files[relative] = file;
+  day.edits = Number(day.edits || 0) + 1;
+
+  history[key] = day;
+  await context.globalState.update('galaxy.codingHistory', trimCodingHistory(history));
+}
+
+async function recordCodingSave(context, document) {
+  if (!context || !document || document.uri.scheme !== 'file') return;
+  const root = getWorkspaceRoot();
+  if (!root || !document.uri.fsPath.startsWith(root)) return;
+
+  let history = context.globalState.get('galaxy.codingHistory', {}) || {};
+  const key = localDayKey();
+  const day = history[key] || {
+    activeMs: 0,
+    edits: 0,
+    saves: 0,
+    files: {},
+    languages: {},
+    projects: {}
+  };
+
+  const relative = path.relative(root, document.uri.fsPath) || path.basename(document.uri.fsPath);
+  const language = document.languageId || 'unknown';
+  const file = day.files?.[relative] || {
+    language,
+    activeMs: 0,
+    edits: 0,
+    saves: 0
+  };
+
+  file.language = language;
+  file.saves = Number(file.saves || 0) + 1;
+  day.files = day.files || {};
+  day.files[relative] = file;
+  day.saves = Number(day.saves || 0) + 1;
+
+  history[key] = day;
+  await context.globalState.update('galaxy.codingHistory', trimCodingHistory(history));
+}
+
+function getCodingHistoryState(context) {
+  const history = context?.globalState.get('galaxy.codingHistory', {}) || {};
+  const todayKey = localDayKey();
+  const today = history[todayKey] || {
+    activeMs: 0,
+    edits: 0,
+    saves: 0,
+    files: {},
+    languages: {},
+    projects: {}
+  };
+
+  const goalMinutes = Number(context?.globalState.get('galaxy.dailyCodingGoalMinutes', 240) || 240);
+  const files = Object.entries(today.files || {})
+    .map(([name, value]) => ({
+      name,
+      language: value.language || 'unknown',
+      activeMs: Number(value.activeMs || 0),
+      edits: Number(value.edits || 0),
+      saves: Number(value.saves || 0)
+    }))
+    .sort((a, b) => (b.activeMs + b.edits * 1000) - (a.activeMs + a.edits * 1000))
+    .slice(0, 8);
+
+  const languages = Object.entries(today.languages || {})
+    .map(([name, activeMs]) => ({ name, activeMs: Number(activeMs || 0) }))
+    .sort((a, b) => b.activeMs - a.activeMs)
+    .slice(0, 6);
+
+  const recentDays = Object.keys(history)
+    .sort()
+    .reverse()
+    .slice(0, 7)
+    .map((key) => ({
+      date: key,
+      activeMs: Number(history[key]?.activeMs || 0),
+      edits: Number(history[key]?.edits || 0),
+      saves: Number(history[key]?.saves || 0)
+    }));
+
+  const goalMs = goalMinutes * 60000;
+  return {
+    todayKey,
+    activeMs: Number(today.activeMs || 0),
+    activeText: formatCompactDuration(today.activeMs || 0),
+    edits: Number(today.edits || 0),
+    saves: Number(today.saves || 0),
+    files,
+    languages,
+    recentDays,
+    goalMinutes,
+    goalText: formatCompactDuration(goalMs),
+    goalPercent: goalMs > 0 ? Math.min(100, Math.round((Number(today.activeMs || 0) / goalMs) * 100)) : 0
+  };
+}
+
+function getFocusTimerState(context) {
+  const stored = context?.globalState.get('galaxy.focusTimer', null);
+  if (!stored) {
+    return {
+      running: false,
+      paused: false,
+      durationMinutes: 0,
+      remainingMs: 0,
+      endAt: 0,
+      label: 'Ready'
+    };
+  }
+
+  let remainingMs = Number(stored.remainingMs || 0);
+  if (stored.running && stored.endAt) {
+    remainingMs = Math.max(0, Number(stored.endAt) - Date.now());
+  }
+
+  return {
+    ...stored,
+    remainingMs,
+    label: stored.running ? 'Focus Running' : (remainingMs > 0 ? 'Paused' : 'Ready')
+  };
+}
+
+async function setDailyCodingGoal(context) {
+  const current = Number(context?.globalState.get('galaxy.dailyCodingGoalMinutes', 240) || 240);
+  const value = await vscode.window.showInputBox({
+    title: 'Daily Coding Goal',
+    prompt: 'How many minutes do you want to code today?',
+    value: String(current),
+    validateInput: (input) => {
+      const minutes = Number(input);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+        return 'Enter a number between 1 and 1440 minutes.';
+      }
+      return undefined;
+    }
+  });
+  if (value === undefined) return false;
+  await context.globalState.update('galaxy.dailyCodingGoalMinutes', Number(value));
+  return true;
+}
+
+async function startFocusTimer(context, minutes) {
+  const durationMinutes = Number(minutes);
+  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) return false;
+
+  const now = Date.now();
+  const state = {
+    running: true,
+    paused: false,
+    durationMinutes,
+    remainingMs: durationMinutes * 60000,
+    startedAt: now,
+    endAt: now + durationMinutes * 60000
+  };
+
+  focusTimerCompletionKey = '';
+  await context.globalState.update('galaxy.focusTimer', state);
+  vscode.window.showInformationMessage('Galaxy Focus started for ' + durationMinutes + ' minutes.');
+  return true;
+}
+
+async function startCustomFocusTimer(context) {
+  const value = await vscode.window.showInputBox({
+    title: 'Start Focus Timer',
+    prompt: 'Focus duration in minutes',
+    value: '60',
+    validateInput: (input) => {
+      const minutes = Number(input);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 720) {
+        return 'Enter a number between 1 and 720 minutes.';
+      }
+      return undefined;
+    }
+  });
+  if (value === undefined) return false;
+  return startFocusTimer(context, Number(value));
+}
+
+async function pauseFocusTimer(context) {
+  const state = getFocusTimerState(context);
+  if (!state.running) return false;
+
+  await context.globalState.update('galaxy.focusTimer', {
+    ...state,
+    running: false,
+    paused: true,
+    endAt: 0
+  });
+  return true;
+}
+
+async function resumeFocusTimer(context) {
+  const state = getFocusTimerState(context);
+  if (state.running || state.remainingMs <= 0) return false;
+
+  await context.globalState.update('galaxy.focusTimer', {
+    ...state,
+    running: true,
+    paused: false,
+    endAt: Date.now() + state.remainingMs
+  });
+  return true;
+}
+
+async function stopFocusTimer(context) {
+  await context.globalState.update('galaxy.focusTimer', null);
+  focusTimerCompletionKey = '';
+  return true;
+}
+
+async function checkFocusTimerCompletion(context) {
+  const state = getFocusTimerState(context);
+  if (!state.running || state.remainingMs > 0) return;
+
+  const key = String(state.startedAt || state.endAt || 'done');
+  if (focusTimerCompletionKey === key) return;
+  focusTimerCompletionKey = key;
+
+  await context.globalState.update('galaxy.focusTimer', null);
+  vscode.window.showInformationMessage('Galaxy Focus complete. Nice — your timer is finished.');
+}
+
+function renderCodingFiles(files) {
+  if (!files.length) return '<p class="muted">No coding activity recorded yet today.</p>';
+  return files.map((file) =>
+    '<div class="history-row"><div><strong>' + escapeHtml(file.name) +
+    '</strong><small>' + escapeHtml(file.language) + ' · ' + file.edits + ' edits · ' +
+    file.saves + ' saves</small></div><span>' + escapeHtml(formatCompactDuration(file.activeMs)) +
+    '</span></div>'
+  ).join('');
+}
+
+function renderLanguageHistory(items) {
+  if (!items.length) return '<span class="muted">No language activity yet.</span>';
+  return items.map((item) =>
+    '<span class="language-pill">' + escapeHtml(item.name) + ' · ' +
+    escapeHtml(formatCompactDuration(item.activeMs)) + '</span>'
+  ).join('');
+}
+
+function renderRecentCodingDays(items) {
+  if (!items.length) return '<p class="muted">No recent history yet.</p>';
+  return items.map((item) =>
+    '<div class="history-day"><strong>' + escapeHtml(item.date) + '</strong><span>' +
+    escapeHtml(formatCompactDuration(item.activeMs)) + ' · ' + item.edits +
+    ' edits · ' + item.saves + ' saves</span></div>'
+  ).join('');
+}
+
 function workspaceStateKey(extensionUri) {
   return getWorkspaceRoot(extensionUri) || 'no-workspace';
 }
@@ -1748,6 +2123,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'ai', label: 'AI HUD' },
   { id: 'notes', label: 'Project Notes' },
   { id: 'session', label: 'Coding Session Stats' },
+  { id: 'focus', label: 'Coding Focus + History' },
   { id: 'snapshots', label: 'Workspace Snapshots' },
   { id: 'extensions', label: 'Galaxy Extension Hub' },
   { id: 'projects', label: 'Project Launcher' },
@@ -2015,8 +2391,6 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
     workspaceName = vscode.workspace.workspaceFolders[0].name;
-  } else if (extensionUri?.fsPath) {
-    workspaceName = path.basename(extensionUri.fsPath);
   }
 
   return {
@@ -2035,6 +2409,8 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     ai: getAiHudState(),
     projectNote: context ? getProjectNote(context, extensionUri) : '',
     session: getSessionStats(),
+    codingHistory: context ? getCodingHistoryState(context) : null,
+    focusTimer: context ? getFocusTimerState(context) : null,
     snapshots: context ? getWorkspaceSnapshots(context, extensionUri) : [],
     galaxyExtensions: getGalaxyExtensions(),
     widgets: context ? getWidgetState(context) : { hidden: [] },
