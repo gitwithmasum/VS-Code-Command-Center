@@ -1589,6 +1589,14 @@ function localDayKey(date = new Date()) {
   return year + '-' + month + '-' + day;
 }
 
+function formatTimerClock(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+}
+
 function formatCompactDuration(ms) {
   const totalMinutes = Math.max(0, Math.floor(Number(ms || 0) / 60000));
   const hours = Math.floor(totalMinutes / 60);
@@ -2941,12 +2949,44 @@ function getDashboardHtml(state) {
   .session-box{padding:14px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
   .session-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
   .session-box strong{font-size:18px}
+  .focus-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .goal-progress{height:9px;border-radius:999px;background:rgba(0,247,255,.08);overflow:hidden;margin:10px 0 14px}
+  .goal-progress span{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--purple));box-shadow:0 0 16px rgba(0,247,255,.25)}
+  .focus-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .focus-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .focus-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .focus-stat strong{font-size:17px}
+  .focus-timer{display:flex;justify-content:space-between;gap:14px;align-items:center;margin:14px 0;padding:14px;border:1px solid rgba(139,92,255,.18);border-radius:14px;background:rgba(139,92,255,.035)}
+  .focus-clock{font-family:Consolas,'Courier New',monospace;font-size:28px;letter-spacing:.06em;color:var(--cyan)}
+  .focus-controls{display:flex;gap:8px;flex-wrap:wrap}
+  .language-pills{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
+  .language-pill{padding:7px 9px;border:1px solid rgba(0,247,255,.12);border-radius:999px;color:var(--muted);font-size:10px}
+  .focus-history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .history-panel{padding:12px;border:1px solid rgba(0,247,255,.1);border-radius:12px;background:rgba(0,247,255,.014)}
+  .history-row,.history-day{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .history-row:last-child,.history-day:last-child{border-bottom:0}
+  .history-row>div{display:flex;flex-direction:column;min-width:0}
+  .history-row strong,.history-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .history-row small,.history-day span{color:var(--muted);margin-top:3px}
+  .debug-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .debug-stat{padding:12px;border:1px solid rgba(255,79,216,.16);border-radius:12px;background:rgba(255,79,216,.025)}
+  .debug-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .debug-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .debug-list{display:grid;gap:8px}
+  .debug-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+  .debug-main{display:flex;gap:10px;align-items:flex-start;min-width:0}
+  .debug-main>div{display:flex;flex-direction:column;min-width:0}
+  .debug-main strong,.debug-main small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .debug-main small{color:var(--muted);margin-top:4px}
+  .debug-error{color:#ff6b8a}
+  .debug-warning{color:#ffcc66}
+  .debug-analysis{margin-top:12px;padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,0,0,.22);white-space:pre-wrap;word-break:break-word;line-height:1.55;max-height:360px;overflow:auto}
   .snapshot-list{display:grid;gap:9px}
   .snapshot-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:11px;border:1px solid rgba(0,247,255,.11);border-radius:12px;background:rgba(0,247,255,.018)}
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -3277,6 +3317,37 @@ function getDashboardHtml(state) {
       <p class="muted" style="margin-top:12px;margin-bottom:0">AI HUD prepares context locally. It does not send project data anywhere by itself.</p>
     </article>
 
+    <article class="card wide"${widgetAttr(state, 'debug')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">AI DEBUG ASSISTANT</div>
+          <div class="muted">VS Code Problems + language-model analysis, with Auto Analyze off by default</div>
+        </div>
+        <div class="launcher-actions">
+          <button data-command="analyzeDebug"><span>✦</span>${state.debugAssistant.analyzing ? 'Analyzing…' : 'Analyze Error'}</button>
+          <button data-command="toggleAutoDebug"><span>◉</span>Auto Analyze: ${state.debugAssistant.autoAnalyze ? 'ON' : 'OFF'}</button>
+          ${state.debugAssistant.analysis ? '<button data-command="copyDebugAnalysis"><span>⧉</span>Copy Analysis</button>' : ''}
+        </div>
+      </div>
+
+      <div class="debug-summary">
+        <div class="debug-stat"><span>ERRORS</span><strong>${state.debugAssistant.errors}</strong></div>
+        <div class="debug-stat"><span>WARNINGS</span><strong>${state.debugAssistant.warnings}</strong></div>
+        <div class="debug-stat"><span>AI MODEL</span><strong>${escapeHtml(state.debugAssistant.model || 'Not used yet')}</strong></div>
+      </div>
+
+      <div class="debug-list">${renderDebugDiagnostics(state.debugAssistant.diagnostics)}</div>
+
+      ${state.debugAssistant.lastError
+        ? '<div class="debug-analysis"><strong>AI request error</strong>\n\n' + escapeHtml(state.debugAssistant.lastError) + '</div>'
+        : ''}
+      ${state.debugAssistant.analysis
+        ? '<div class="debug-analysis">' + escapeHtml(state.debugAssistant.analysis) + '</div>'
+        : ''}
+
+      <p class="muted" style="margin:12px 0 0">Auto Analyze sends only the selected diagnostic and a small nearby code snippet to an available VS Code language model. Full project code is not stored or sent by this feature.</p>
+    </article>
+
     <article class="card wide"${widgetAttr(state, 'notes')}>
       <div class="hub-head">
         <div>
@@ -3295,6 +3366,62 @@ function getDashboardHtml(state) {
         <div class="session-box"><span>FILES TOUCHED</span><strong>${state.session.filesTouched}</strong></div>
         <div class="session-box"><span>COMMANDS RUN</span><strong>${state.session.commandsRun}</strong></div>
         <div class="session-box"><span>SAVES</span><strong>${state.session.saves}</strong></div>
+      </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'focus')}>
+      <div class="focus-head">
+        <div>
+          <div class="label">GALAXY FOCUS + CODING HISTORY</div>
+          <h3 style="margin-bottom:4px">${escapeHtml(state.codingHistory.activeText)} today · ${state.codingHistory.goalPercent}% of goal</h3>
+          <div class="muted">Active coding time only — VS Code focused, code editor active, and recent interaction.</div>
+        </div>
+        <button data-command="setCodingGoal"><span>◎</span>Edit Daily Goal</button>
+      </div>
+
+      <div class="goal-progress"><span style="width:${state.codingHistory.goalPercent}%"></span></div>
+
+      <div class="focus-stats">
+        <div class="focus-stat"><span>TODAY</span><strong>${escapeHtml(state.codingHistory.activeText)}</strong></div>
+        <div class="focus-stat"><span>DAILY GOAL</span><strong>${escapeHtml(state.codingHistory.goalText)}</strong></div>
+        <div class="focus-stat"><span>EDITS</span><strong>${state.codingHistory.edits}</strong></div>
+        <div class="focus-stat"><span>SAVES</span><strong>${state.codingHistory.saves}</strong></div>
+      </div>
+
+      <div class="focus-timer">
+        <div>
+          <div class="project-group-title">FOCUS TIMER · ${escapeHtml(state.focusTimer.label)}</div>
+          <div
+            class="focus-clock"
+            id="galaxyFocusClock"
+            data-running="${state.focusTimer.running ? '1' : '0'}"
+            data-end-at="${Number(state.focusTimer.endAt || 0)}"
+            data-remaining="${Number(state.focusTimer.remainingMs || 0)}"
+          >${escapeHtml(formatTimerClock(state.focusTimer.remainingMs || 0))}</div>
+        </div>
+        <div class="focus-controls">
+          <button data-focus-action="25">25 min</button>
+          <button data-focus-action="50">50 min</button>
+          <button data-focus-action="custom">Custom</button>
+          ${state.focusTimer.running
+            ? '<button data-focus-action="pause">Pause</button>'
+            : (state.focusTimer.remainingMs > 0 ? '<button data-focus-action="resume">Resume</button>' : '')}
+          <button data-focus-action="stop">Stop</button>
+        </div>
+      </div>
+
+      <div class="project-group-title">LANGUAGE TIME TODAY</div>
+      <div class="language-pills">${renderLanguageHistory(state.codingHistory.languages)}</div>
+
+      <div class="focus-history-grid">
+        <div class="history-panel">
+          <div class="project-group-title">FILES / ACTIVITY</div>
+          ${renderCodingFiles(state.codingHistory.files)}
+        </div>
+        <div class="history-panel">
+          <div class="project-group-title">LAST 7 DAYS</div>
+          ${renderRecentCodingDays(state.codingHistory.recentDays)}
+        </div>
       </div>
     </article>
 
