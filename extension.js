@@ -4,6 +4,11 @@ const fs = require('fs');
 const net = require('net');
 const https = require('https');
 const { execFileSync, spawn } = require('child_process');
+const {
+  getWorkspaceRoot,
+  readJsonIfExists,
+  createWorkspaceTerminal
+} = require('./src/core/workspace');
 
 let lastEditorContext = {
   fileName: '',
@@ -209,11 +214,6 @@ async function getDevServerStatus() {
     primaryUrl: ports.length ? `http://localhost:${ports[0]}` : ''
   };
 }
-
-function getWorkspaceRoot() {
-  return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
-}
-
 
 function remoteToWebUrl(remoteUrl) {
   const raw = String(remoteUrl || '').trim();
@@ -1158,15 +1158,6 @@ function renderMergedBranches(items) {
     '<div class="branch-clean-row"><strong>' + escapeHtml(branch) + '</strong>' +
     '<button data-delete-merged-branch="' + escapeHtml(branch) + '">Delete</button></div>'
   ).join('');
-}
-
-async function readJsonIfExists(filePath) {
-  try {
-    const raw = await fs.promises.readFile(filePath, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 async function detectProject(extensionUri) {
@@ -4254,7 +4245,7 @@ function renderGitLabCliRepos(state) {
 }
 
 async function runProviderBridge(action) {
-  const terminal = vscode.window.createTerminal({ name: 'Galaxy Provider Bridge' });
+  const terminal = createWorkspaceTerminal('Galaxy Provider Bridge');
   terminal.show();
   const commands = {
     gitlabLogin: 'glab auth login',
@@ -5623,7 +5614,7 @@ async function runAction(command, value, context) {
       return openRemoteRepository(context?.extensionUri);
     case 'runTerminal': {
       await recordCommand(context, value);
-      const terminal = vscode.window.createTerminal({ name: 'Galaxy Command Center' });
+      const terminal = createWorkspaceTerminal('Galaxy Command Center');
       terminal.show();
       terminal.sendText(value, true);
       return;
@@ -5678,7 +5669,7 @@ async function runAction(command, value, context) {
       const gitCommand = fallbackCommands[value];
       if (!gitCommand) return;
       await recordCommand(context, gitCommand);
-      const terminal = vscode.window.createTerminal({ name: 'Galaxy Git' });
+      const terminal = createWorkspaceTerminal('Galaxy Git');
       terminal.show();
       terminal.sendText(gitCommand, true);
       return;
