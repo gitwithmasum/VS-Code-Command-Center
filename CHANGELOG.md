@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.8.0
+
+- Added Quality Gate + Auto Verify with READY / REVIEW / BLOCKED status and a 0–100 score.
+- Added Apply Only vs Apply & Verify for AI Fix Studio proposals.
+- Added automatic diagnostics, lint, typecheck, test, and build verification after Apply & Verify.
+- Added Before → After error reporting for AI fixes.
+- Added coverage summary and weak-file detection from coverage-summary.json.
+- Added explicit npm audit and outdated dependency scanning.
+- Added local recurring-error tracking.
+- Added safe Revert Last AI Apply with stale-content protection.
+- Added Smart Commit Gate requiring a fresh READY quality result.
+- Added Explain Current File to Smart Developer Assistant.
+
+
 ## 2.7.0
 
 - Added AI Fix Studio with safe proposal, diff review, and explicit apply workflow.
