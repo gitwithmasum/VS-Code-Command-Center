@@ -142,6 +142,17 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Explain Current File AI walkthrough
 - No dependency upgrade or source-code rollback happens without explicit user action
 
+## Stability + Modular Cleanup — v2.8.1
+
+- Started modularizing the 200 KB+ extension host code into `src/core`
+- Extracted workspace helpers and Git helpers
+- Fixed JSON project metadata reads so Smart Project task detection and test-framework detection work reliably
+- Command Center, Git, and provider terminals now open with the active workspace as their working directory
+- Hardened last-commit parsing when commit subjects contain the `|` character
+- Added confirmation before deleting workspace snapshots
+- Improved VS Code command session counting and dashboard refresh after launched commands
+- Added a prepublish syntax gate for the main extension and extracted core modules
+
 ## Planned modules
 
 - Project Launcher
