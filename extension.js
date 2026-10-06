@@ -4063,6 +4063,12 @@ function getDashboardHtml(state) {
     });
   });
 
+  document.querySelectorAll('[data-smart-task]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'runSmartProjectTask', value: button.dataset.smartTask });
+    });
+  });
+
   document.querySelectorAll('[data-extension-id]').forEach((button) => {
     button.addEventListener('click', () => {
       vscode.postMessage({ command: 'openGalaxyExtension', value: button.dataset.extensionId });
@@ -4280,6 +4286,16 @@ async function runAction(command, value, context) {
       return openDebugDiagnostic(value);
     case 'openDebugQuickFix':
       return openDebugQuickFix(value);
+    case 'runSmartProjectTask':
+      return runSmartProjectTask(context, context?.extensionUri, value);
+    case 'analyzeClipboardError':
+      return analyzeClipboardError();
+    case 'analyzeGitConflictAi':
+      return analyzeFirstGitConflict(context?.extensionUri);
+    case 'reviewStagedChangesAi':
+      return reviewStagedChangesWithAi(context?.extensionUri);
+    case 'copySmartAssistantResult':
+      return copySmartAssistantResult();
     case 'cloneRepository':
       return cloneRepository(value);
     case 'initializeRepository':
@@ -4541,7 +4557,11 @@ async function openDashboard(context) {
         message.command === 'setCodingGoal' ||
         message.command === 'focusTimerAction' ||
         message.command === 'analyzeDebug' ||
-        message.command === 'toggleAutoDebug'
+        message.command === 'toggleAutoDebug' ||
+        message.command === 'runSmartProjectTask' ||
+        message.command === 'analyzeClipboardError' ||
+        message.command === 'analyzeGitConflictAi' ||
+        message.command === 'reviewStagedChangesAi'
       ) {
         await render();
       }
