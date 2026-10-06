@@ -2292,11 +2292,23 @@ function getCoverageState(extensionUri) {
       const pct = Number(total[key]?.pct);
       return Number.isFinite(pct) ? pct : null;
     };
+
+    const weakFiles = Object.entries(summary)
+      .filter(([key]) => key !== 'total')
+      .map(([file, metrics]) => ({
+        file: path.relative(root, file) || path.basename(file),
+        lines: Number(metrics?.lines?.pct)
+      }))
+      .filter((item) => Number.isFinite(item.lines) && item.lines < 80)
+      .sort((a, b) => a.lines - b.lines)
+      .slice(0, 5);
+
     return {
       lines: value('lines'),
       statements: value('statements'),
       functions: value('functions'),
-      branches: value('branches')
+      branches: value('branches'),
+      weakFiles
     };
   } catch {
     return null;
@@ -2403,7 +2415,7 @@ function calculateQualityGate({ errors, warnings, conflicts, checks, dependency 
   let status = 'READY';
   if (errors > 0 || conflicts > 0 || failedChecks > 0 || dependency?.critical > 0) {
     status = 'BLOCKED';
-  } else if (warnings > 0 || dependency?.high > 0 || dependency?.moderate > 0 || score < 90) {
+  } else if (warnings > 0 || dependency?.high > 0 || dependency?.moderate > 0 || dependency?.outdated > 0 || score < 90) {
     status = 'REVIEW';
   }
 
@@ -2508,18 +2520,32 @@ async function scanDependencies(extensionUri) {
   };
   if (dashboardRenderCallback) await dashboardRenderCallback();
 
-  const audit = await runCapturedProcess(
-    npmCommand,
-    ['audit', '--json'],
-    root,
-    90000
-  );
+  const [audit, outdatedResult] = await Promise.all([
+    runCapturedProcess(
+      npmCommand,
+      ['audit', '--json'],
+      root,
+      90000
+    ),
+    runCapturedProcess(
+      npmCommand,
+      ['outdated', '--json'],
+      root,
+      90000
+    )
+  ]);
 
   let parsed = null;
+  let outdated = null;
   try {
     parsed = JSON.parse((audit.stdout || audit.stderr || '{}').trim() || '{}');
   } catch {
     parsed = null;
+  }
+  try {
+    outdated = JSON.parse((outdatedResult.stdout || '{}').trim() || '{}');
+  } catch {
+    outdated = null;
   }
 
   const vulnerabilities = parsed?.metadata?.vulnerabilities || {};
@@ -2529,6 +2555,7 @@ async function scanDependencies(extensionUri) {
     moderate: Number(vulnerabilities.moderate || 0),
     low: Number(vulnerabilities.low || 0),
     total: Number(vulnerabilities.total || 0),
+    outdated: outdated && typeof outdated === 'object' ? Object.keys(outdated).length : 0,
     scannedAt: Date.now(),
     error:
       parsed
@@ -3537,6 +3564,53 @@ async function runSmartProjectTask(context, extensionUri, kind) {
     'Galaxy ' + kind + ' finished with exit code ' + result.exitCode + '.'
   );
   return result.exitCode === 0;
+}
+
+
+async function explainCurrentFileAi() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') {
+    vscode.window.showInformationMessage('Open a source file first.');
+    return false;
+  }
+
+  const document = editor.document;
+  smartAssistantState = {
+    running: true,
+    task: 'explain-file',
+    command: path.basename(document.fileName),
+    exitCode: null,
+    output: '',
+    analysis: '',
+    model: '',
+    lastError: '',
+    startedAt: Date.now(),
+    finishedAt: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const ai = await requestGalaxyModel(
+    [
+      'Explain this source file for a developer who needs to maintain it.',
+      'Cover: purpose, main flow, important functions/classes, dependencies visible in the file, risky areas, and practical improvement ideas.',
+      'Do not invent project context outside the supplied source.',
+      '',
+      'File: ' + path.basename(document.fileName),
+      'Language: ' + document.languageId,
+      '',
+      truncatePromptText(document.getText(), 14000)
+    ].join('\n'),
+    'Act as a concise senior engineer performing a source-file walkthrough.'
+  );
+
+  smartAssistantState.running = false;
+  smartAssistantState.analysis = ai.text;
+  smartAssistantState.model = ai.model;
+  smartAssistantState.lastError = ai.error;
+  smartAssistantState.finishedAt = Date.now();
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
 }
 
 async function analyzeClipboardError() {
@@ -4640,6 +4714,7 @@ function getDashboardHtml(state) {
 
       <div class="smart-dev-actions">
         ${renderSmartTaskButtons(state.smartAssistant.tasks)}
+        <button data-command="explainCurrentFileAi"><span>◎</span>Explain Current File</button>
         <button data-command="analyzeClipboardError"><span>⚠</span>Analyze Clipboard Error</button>
         <button data-command="analyzeGitConflictAi"><span>⑂</span>AI Conflict Review</button>
         <button data-command="reviewStagedChangesAi"><span>✓</span>AI Commit Review</button>
@@ -4756,7 +4831,14 @@ function getDashboardHtml(state) {
               '<div><span>STATEMENTS</span><strong>' + escapeHtml(state.qualityGate.coverage.statements ?? '—') + '%</strong></div>' +
               '<div><span>FUNCTIONS</span><strong>' + escapeHtml(state.qualityGate.coverage.functions ?? '—') + '%</strong></div>' +
               '<div><span>BRANCHES</span><strong>' + escapeHtml(state.qualityGate.coverage.branches ?? '—') + '%</strong></div>' +
-              '</div>'
+              '</div>' +
+              (state.qualityGate.coverage.weakFiles?.length
+                ? '<div class="project-group-title" style="margin-top:10px">WEAK FILES (&lt;80% lines)</div>' +
+                  state.qualityGate.coverage.weakFiles.map((item) =>
+                    '<div class="history-row"><div><strong>' + escapeHtml(item.file) +
+                    '</strong></div><span>' + escapeHtml(item.lines) + '%</span></div>'
+                  ).join('')
+                : '')
             : '<p class="muted">No coverage/coverage-summary.json detected.</p>'}
         </div>
 
@@ -4769,6 +4851,7 @@ function getDashboardHtml(state) {
               '<div><span>MODERATE</span><strong>' + state.qualityGate.dependency.moderate + '</strong></div>' +
               '<div><span>TOTAL</span><strong>' + state.qualityGate.dependency.total + '</strong></div>' +
               '</div>' +
+              '<div class="commit-line">Outdated packages: ' + state.qualityGate.dependency.outdated + '</div>' +
               (state.qualityGate.dependency.error ? '<p class="muted">' + escapeHtml(state.qualityGate.dependency.error) + '</p>' : '')
             : '<p class="muted">Run Scan Dependencies to execute npm audit for this Node project.</p>'}
         </div>
@@ -5496,6 +5579,8 @@ async function runAction(command, value, context) {
       return runSmartProjectTask(context, context?.extensionUri, value);
     case 'analyzeClipboardError':
       return analyzeClipboardError();
+    case 'explainCurrentFileAi':
+      return explainCurrentFileAi();
     case 'analyzeGitConflictAi':
       return analyzeFirstGitConflict(context?.extensionUri);
     case 'reviewStagedChangesAi':
@@ -5786,6 +5871,7 @@ async function openDashboard(context) {
         message.command === 'toggleAutoDebug' ||
         message.command === 'runSmartProjectTask' ||
         message.command === 'analyzeClipboardError' ||
+        message.command === 'explainCurrentFileAi' ||
         message.command === 'analyzeGitConflictAi' ||
         message.command === 'reviewStagedChangesAi' ||
         message.command === 'generateDiagnosticFix' ||
