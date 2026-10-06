@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.1
+
+- Began modular cleanup by extracting workspace/runtime helpers and Git helpers into `src/core`.
+- Fixed synchronous JSON metadata access used by Smart Project task detection and test-framework detection.
+- Command Center terminals now use the active workspace as their current working directory.
+- Fixed last-commit parsing for commit subjects containing pipe characters.
+- Added modal confirmation before deleting workspace snapshots.
+- Improved VS Code command session counting and dashboard refresh behavior.
+- Added a VS Code prepublish syntax gate covering `extension.js` and the new core modules.
+
+
 ## 2.8.0
 
 - Added Quality Gate + Auto Verify with READY / REVIEW / BLOCKED status and a 0–100 score.
