@@ -2148,6 +2148,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'environment', label: 'Environment Status' },
   { id: 'server', label: 'Dev Server Monitor' },
   { id: 'smartActions', label: 'Smart Project Actions' },
+  { id: 'smartDeveloper', label: 'Smart Developer Assistant' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
   { id: 'modes', label: 'Developer Modes' },
@@ -2638,8 +2639,10 @@ async function copySmartAssistantResult() {
 }
 
 function getSmartAssistantState(extensionUri) {
+  const output = String(smartAssistantState.output || '');
   return {
     ...smartAssistantState,
+    outputPreview: output.length > 7000 ? '…\n' + output.slice(-7000) : output,
     tasks: getSmartTaskScripts(extensionUri).available
   };
 }
@@ -3156,6 +3159,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     githubCollaboration,
     providerBridge: getProviderBridgeState(),
     advancedRepo: getAdvancedRepoState(extensionUri),
+    smartAssistant: getSmartAssistantState(extensionUri),
     recentFiles,
     ai: getAiHudState(),
     debugAssistant: context ? getDebugAssistantState(context) : null,
@@ -3315,6 +3319,13 @@ function getDashboardHtml(state) {
   .server-line{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:14px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.02)}
   .server-state{color:var(--cyan);font-weight:700;letter-spacing:.08em}
   .server-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .smart-dev-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .smart-dev-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .smart-dev-box{padding:12px;border:1px solid rgba(0,247,255,.11);border-radius:12px;background:rgba(0,247,255,.018)}
+  .smart-dev-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .smart-dev-box strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .smart-dev-output{margin-top:12px;padding:14px;border:1px solid rgba(139,92,255,.16);border-radius:12px;background:rgba(0,0,0,.22);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;font-family:Consolas,'Courier New',monospace;font-size:11px;line-height:1.5}
+  .smart-dev-analysis{margin-top:12px;padding:14px;border:1px solid rgba(0,247,255,.14);border-radius:12px;background:rgba(0,247,255,.018);white-space:pre-wrap;word-break:break-word;max-height:380px;overflow:auto;line-height:1.55}
   .git-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
   .git-box{padding:13px;border:1px solid rgba(139,92,255,.18);border-radius:12px;background:rgba(139,92,255,.035)}
   .git-box span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
@@ -3429,7 +3440,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid{grid-template-columns:1fr}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -3516,6 +3527,53 @@ function getDashboardHtml(state) {
       <div class="smart-grid">
         ${renderSmartActions(state.project.actions)}
       </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'smartDeveloper')}>
+      <div class="hub-head">
+        <div>
+          <div class="label">SMART DEVELOPER ASSISTANT</div>
+          <div class="muted">Run project checks, capture failures, and get AI guidance without scraping your terminal.</div>
+        </div>
+        ${state.smartAssistant.analysis || state.smartAssistant.outputPreview
+          ? '<button data-command="copySmartAssistantResult"><span>⧉</span>Copy Result</button>'
+          : ''}
+      </div>
+
+      <div class="smart-dev-actions">
+        ${renderSmartTaskButtons(state.smartAssistant.tasks)}
+        <button data-command="analyzeClipboardError"><span>⚠</span>Analyze Clipboard Error</button>
+        <button data-command="analyzeGitConflictAi"><span>⑂</span>AI Conflict Review</button>
+        <button data-command="reviewStagedChangesAi"><span>✓</span>AI Commit Review</button>
+      </div>
+
+      <div class="smart-dev-grid">
+        <div class="smart-dev-box"><span>STATUS</span><strong>${state.smartAssistant.running ? 'RUNNING…' : (state.smartAssistant.task ? 'READY' : 'IDLE')}</strong></div>
+        <div class="smart-dev-box"><span>LAST TASK</span><strong>${escapeHtml(state.smartAssistant.task || 'None')}</strong></div>
+        <div class="smart-dev-box"><span>AI MODEL</span><strong>${escapeHtml(state.smartAssistant.model || 'Not used yet')}</strong></div>
+      </div>
+
+      ${state.smartAssistant.command
+        ? '<div class="commit-line">Command / Source: ' + escapeHtml(state.smartAssistant.command) +
+          (state.smartAssistant.exitCode !== null ? ' · Exit ' + state.smartAssistant.exitCode : '') + '</div>'
+        : ''}
+
+      ${state.smartAssistant.outputPreview
+        ? '<div class="project-group-title" style="margin-top:12px">CAPTURED OUTPUT</div><div class="smart-dev-output">' +
+          escapeHtml(state.smartAssistant.outputPreview) + '</div>'
+        : ''}
+
+      ${state.smartAssistant.lastError
+        ? '<div class="smart-dev-analysis"><strong>AI request error</strong>\n\n' +
+          escapeHtml(state.smartAssistant.lastError) + '</div>'
+        : ''}
+
+      ${state.smartAssistant.analysis
+        ? '<div class="project-group-title" style="margin-top:12px">AI ANALYSIS</div><div class="smart-dev-analysis">' +
+          escapeHtml(state.smartAssistant.analysis) + '</div>'
+        : ''}
+
+      <p class="muted" style="margin:12px 0 0">Test/build/lint/typecheck output is analyzed only when Command Center runs that task and detects a failure. Clipboard, conflict, and staged-diff analysis run only when you click them.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'git')}>
