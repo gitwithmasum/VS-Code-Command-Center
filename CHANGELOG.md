@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.9.1
+
+- Added CP Multi Test Case Runner with `---` case separators.
+- Added optional expected-output mode for input-only multi-case execution.
+- Added verdict history for sample, suite, and stress runs.
+- Added automatic local-judge failure tracking for WA, TLE, RE, and CE states.
+- Kept official AC explicit so sample success is not mistaken for judge acceptance.
+- Added Stress Test workflow using generator, brute, and optimized solutions.
+- Added mismatch reporting with failing input and compared outputs.
+- Added C++17, Python 3, and JavaScript starter templates.
+- Added New Problem File creation through VS Code Save As.
+- Hardened contest timing around expiry and problem switching.
+
+
 ## 2.9.0
 
 - Added Galaxy CP Arena.
