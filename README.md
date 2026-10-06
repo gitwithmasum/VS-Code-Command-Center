@@ -153,6 +153,23 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Improved VS Code command session counting and dashboard refresh after launched commands
 - Added a prepublish syntax gate for the main extension and extracted core modules
 
+## Galaxy CP Arena — v2.9
+
+- Local contest countdown with custom duration
+- Problem tracker for A–H with per-problem active time
+- Problem states: Not Started, Solving, WA, TLE, RE, and AC
+- Local Sample Judge for C/C++, Python, and JavaScript
+- Native C/C++ compile support through gcc/g++ when installed
+- Expected-vs-actual output comparison with PASS / WRONG ANSWER / TLE / runtime / compile verdicts
+- Runtime display and stderr preview
+- C++ / Python CP Snippet Vault
+- AI Complexity analysis for selected code or the current source file
+- AI Edge Case generator
+- Panic Assist with three escalating hints from a copied problem statement instead of a full solution
+- CP Focus Mode using VS Code Zen Mode
+- Quick links for Codeforces, AtCoder, LeetCode, and CodeChef
+- CP session state is stored locally in VS Code; no database is required
+
 ## Planned modules
 
 - Project Launcher
