@@ -306,6 +306,19 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - New `src/features/agent.js` pure core validates plans, action risk, progression, fallback planning, and completion state
 - Added automated Agent tests to the existing `npm test` and prepublish gates
 
+## Developer Knowledge Graph — v3.5
+
+- Builds a local project-wide graph from the existing Architecture Intelligence scan
+- Indexes functions/classes and local import relationships
+- **Who Calls This?** finds cross-file references to a uniquely indexed symbol
+- **File Impact** traces direct and transitive reverse dependencies to show what a change may affect
+- **Find Feature / Flow** searches filenames, symbols, and semantic project layers
+- Detects likely Authentication, Database, API/HTTP, UI, Tests, and Configuration layers
+- Opens matched files directly from the dashboard
+- Symbol references are intentionally labeled heuristic; the graph does not pretend to be a compiler/type checker
+- Source code stays local; this feature does not send project content to an AI service
+- Graph results are workspace-scoped and cached for 90 seconds, with an explicit Rebuild Graph action
+
 ## Planned modules
 
 - Project Launcher
