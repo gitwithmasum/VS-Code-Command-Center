@@ -59,6 +59,14 @@ const {
   diagnosticPrivacyKey,
   migrateRecurringErrorRecords
 } = require('./src/features/quality');
+const {
+  detectLocalWorkflows,
+  normalizeCiStatus,
+  summarizeCiRuns,
+  mapCiScripts,
+  getGitPushState,
+  evaluatePushReadiness
+} = require('./src/features/ci');
 
 let lastEditorContext = {
   fileName: '',
@@ -171,6 +179,7 @@ let githubStateCache = {
 };
 
 let githubCollaborationCache = { key: '', at: 0, value: null };
+let ciIntelligenceCache = { key: '', at: 0, value: null };
 
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
@@ -5618,6 +5627,281 @@ function renderArchitectureSearch(items) {
   ).join('');
 }
 
+
+async function getCiIntelligenceState(
+  gitState,
+  qualityState,
+  orchestratorState,
+  force = false
+) {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    return {
+      workflows: [],
+      mapping: { referenced: [], mapped: [], missingLocal: [], localNotInCi: [] },
+      git: getGitPushState(''),
+      remote: {
+        available: false,
+        status: 'UNKNOWN',
+        runs: [],
+        jobs: [],
+        failingJobs: [],
+        error: 'Open a workspace folder first.'
+      },
+      readiness: {
+        verdict: 'BLOCKED',
+        checks: [],
+        reasons: ['Open a workspace folder first.']
+      }
+    };
+  }
+
+  const workflows = detectLocalWorkflows(root);
+  const discovery = discoverWorkspaceTasks(root);
+  const mapping = mapCiScripts(workflows, discovery);
+  const gitPush = getGitPushState(root);
+  const parsed = parseGitHubRemote(gitState?.originUrl || '');
+
+  const cacheKey = [
+    parsed?.fullName || 'local',
+    gitPush.branch || '',
+    gitPush.headSha || ''
+  ].join('|');
+
+  let remote = null;
+  const cacheFresh =
+    !force &&
+    ciIntelligenceCache.value &&
+    ciIntelligenceCache.key === cacheKey &&
+    Date.now() - ciIntelligenceCache.at < 45000;
+
+  if (cacheFresh) {
+    remote = ciIntelligenceCache.value;
+  } else if (!parsed) {
+    remote = {
+      available: false,
+      status: 'UNKNOWN',
+      currentHeadCovered: false,
+      runs: [],
+      jobs: [],
+      failingJobs: [],
+      error: 'Current origin is not a GitHub repository.'
+    };
+  } else {
+    const session = await getGitHubSession(false);
+    if (!session) {
+      remote = {
+        available: false,
+        status: 'UNKNOWN',
+        currentHeadCovered: false,
+        runs: [],
+        jobs: [],
+        failingJobs: [],
+        error: 'Connect GitHub to load Actions status.'
+      };
+    } else {
+      const base =
+        '/repos/' +
+        encodeURIComponent(parsed.owner) +
+        '/' +
+        encodeURIComponent(parsed.repo);
+
+      try {
+        const runsRaw = await githubApi(
+          base +
+            '/actions/runs?branch=' +
+            encodeURIComponent(gitPush.branch || '') +
+            '&per_page=10',
+          session.accessToken
+        );
+
+        const summary = summarizeCiRuns(
+          runsRaw?.workflow_runs || [],
+          gitPush.branch,
+          gitPush.headSha
+        );
+
+        const jobRun = summary.currentHeadRun || summary.latest;
+        let jobs = [];
+
+        if (jobRun?.id) {
+          try {
+            const jobsRaw = await githubApi(
+              base +
+                '/actions/runs/' +
+                encodeURIComponent(jobRun.id) +
+                '/jobs?per_page=100',
+              session.accessToken
+            );
+
+            jobs = (jobsRaw?.jobs || []).slice(0, 30).map((job) => ({
+              id: String(job.id || ''),
+              name: job.name || 'Job',
+              status: normalizeCiStatus(job),
+              rawStatus: job.conclusion || job.status || 'unknown',
+              url: job.html_url || ''
+            }));
+          } catch {}
+        }
+
+        remote = {
+          available: true,
+          fullName: parsed.fullName,
+          webUrl: parsed.webUrl,
+          ...summary,
+          jobs,
+          failingJobs: jobs.filter((job) => job.status === 'FAIL'),
+          error: ''
+        };
+      } catch (error) {
+        remote = {
+          available: false,
+          fullName: parsed.fullName,
+          webUrl: parsed.webUrl,
+          status: 'UNKNOWN',
+          currentHeadCovered: false,
+          runs: [],
+          jobs: [],
+          failingJobs: [],
+          error: error?.message || 'Unable to load GitHub Actions status.'
+        };
+      }
+    }
+
+    ciIntelligenceCache = {
+      key: cacheKey,
+      at: Date.now(),
+      value: remote
+    };
+  }
+
+  const currentFingerprint = getQualityGateFingerprint(root);
+  const qualityFingerprintCurrent =
+    Boolean(qualityState?.fingerprint) &&
+    qualityState.fingerprint === currentFingerprint;
+
+  const readiness = evaluatePushReadiness({
+    git: gitPush,
+    quality: qualityState,
+    orchestrator: orchestratorState,
+    ci: remote,
+    workflows,
+    qualityFingerprintCurrent
+  });
+
+  return {
+    workflows,
+    mapping,
+    git: gitPush,
+    remote,
+    readiness,
+    qualityFingerprintCurrent
+  };
+}
+
+async function refreshCiIntelligence() {
+  ciIntelligenceCache = { key: '', at: 0, value: null };
+  githubCollaborationCache = { key: '', at: 0, value: null };
+  return true;
+}
+
+async function runReadyToPushCheck(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const discovery = discoverWorkspaceTasks(root);
+  const verifyTasks = standardVerifyTasks(discovery);
+
+  if (verifyTasks.length) {
+    const tasksPassed = await executeTaskPlan(
+      context,
+      extensionUri,
+      'Ready-to-Push Verify',
+      verifyTasks,
+      { mode: 'sequential', stopOnFailure: true }
+    );
+    if (!tasksPassed) {
+      vscode.window.showWarningMessage(
+        'Ready-to-Push check stopped because a local verification task failed.'
+      );
+      return false;
+    }
+  }
+
+  const qualityReady = await runQualityGate(context, extensionUri);
+  if (!qualityReady) {
+    vscode.window.showWarningMessage(
+      'Ready-to-Push check stopped because Quality Gate is not READY.'
+    );
+    return false;
+  }
+
+  await refreshCiIntelligence();
+
+  const gitState = await getGitState(extensionUri);
+  const orchestratorState = getTaskOrchestratorState(context);
+  const ciState = await getCiIntelligenceState(
+    gitState,
+    getQualityGateState(context, extensionUri),
+    orchestratorState,
+    true
+  );
+
+  const verdict = ciState.readiness.verdict;
+  const message =
+    verdict === 'READY'
+      ? 'Galaxy Ready-to-Push: READY.'
+      : 'Galaxy Ready-to-Push: ' + verdict + '. Review the CI Center for details.';
+
+  if (verdict === 'READY') {
+    vscode.window.showInformationMessage(message);
+    return true;
+  }
+
+  vscode.window.showWarningMessage(message);
+  return false;
+}
+
+async function pushIfReady(context, extensionUri) {
+  const ready = await runReadyToPushCheck(context, extensionUri);
+  if (!ready) return false;
+
+  const root = getWorkspaceRoot(extensionUri);
+  const gitPush = getGitPushState(root);
+
+  if (!gitPush.upstream) {
+    vscode.window.showWarningMessage(
+      'No upstream branch is configured. Push manually with -u first.'
+    );
+    return false;
+  }
+
+  if (!gitPush.hasCommitsToPush) {
+    vscode.window.showInformationMessage('There are no local commits to push.');
+    return false;
+  }
+
+  const confirm = await vscode.window.showInformationMessage(
+    'READY. Push ' +
+      Math.max(1, Number(gitPush.ahead || 0)) +
+      ' commit(s) from "' +
+      (gitPush.branch || 'current branch') +
+      '" now?',
+    { modal: true },
+    'Push'
+  );
+  if (confirm !== 'Push') return false;
+
+  const pushed = runGitLocal(root, ['push'], 'Verified commits pushed.') !== null;
+  if (pushed) {
+    await refreshCiIntelligence();
+  }
+  return pushed;
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -5639,6 +5923,14 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     ? getDeveloperAnalytics(context, { health, cpState: cpArena })
     : null;
   const architecture = getArchitectureDashboardState(false);
+  const taskOrchestrator = context ? getTaskOrchestratorState(context) : null;
+  const qualityGate = getQualityGateState(context, extensionUri);
+  const ciIntelligence = await getCiIntelligenceState(
+    git,
+    qualityGate,
+    taskOrchestrator,
+    false
+  );
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -5659,10 +5951,11 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     advancedRepo: getAdvancedRepoState(extensionUri),
     smartAssistant: getSmartAssistantState(extensionUri),
     aiEdit: getAiEditState(),
-    qualityGate: getQualityGateState(context, extensionUri),
+    qualityGate,
     developerAnalytics,
     architecture,
-    taskOrchestrator: context ? getTaskOrchestratorState(context) : null,
+    taskOrchestrator,
+    ciIntelligence,
     cpArena,
     cpAi: getCpAiState(),
     recentFiles,
