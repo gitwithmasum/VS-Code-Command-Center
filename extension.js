@@ -2200,6 +2200,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'aiFix', label: 'AI Fix Studio' },
   { id: 'quality', label: 'Quality Gate + Auto Verify' },
   { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
+  { id: 'architecture', label: 'Workspace Architecture Intelligence' },
   { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
@@ -5088,6 +5089,89 @@ async function exportArchitectureJson() {
   return true;
 }
 
+
+function renderArchitectureEntries(items, emptyText = 'No entry points detected.') {
+  if (!items?.length) return '<p class="muted">' + escapeHtml(emptyText) + '</p>';
+  return items.slice(0, 8).map((item) =>
+    '<button class="architecture-row" data-architecture-file="' + escapeHtml(item.file) + '" data-architecture-line="1">' +
+      '<div><strong>' + escapeHtml(item.file) + '</strong><small>' + escapeHtml(item.reason || '') + '</small></div>' +
+      '<span>Open</span>' +
+    '</button>'
+  ).join('');
+}
+
+function renderArchitectureTopLevel(items) {
+  if (!items?.length) return '<p class="muted">No structure data yet.</p>';
+  return items.slice(0, 10).map((item) =>
+    '<div class="architecture-metric-row"><div><strong>' + escapeHtml(item.name) +
+    '</strong><small>' + Number(item.lines || 0) + ' lines</small></div><span>' +
+    Number(item.files || 0) + ' files</span></div>'
+  ).join('');
+}
+
+function renderArchitectureLanguages(items) {
+  if (!items?.length) return '<p class="muted">No source languages detected.</p>';
+  const total = items.reduce((sum, item) => sum + Number(item.count || 0), 0) || 1;
+  return items.slice(0, 8).map((item) => {
+    const percent = Math.round((Number(item.count || 0) / total) * 100);
+    return '<div class="analytics-language-row"><div><strong>' + escapeHtml(item.name) +
+      '</strong><small>' + Number(item.count || 0) + ' files</small></div>' +
+      '<div class="analytics-track"><i style="width:' + percent + '%"></i></div><span>' +
+      percent + '%</span></div>';
+  }).join('');
+}
+
+function renderArchitectureCentral(items) {
+  if (!items?.length) return '<p class="muted">No local module relationships detected.</p>';
+  return items.slice(0, 8).map((item) =>
+    '<button class="architecture-row" data-architecture-file="' + escapeHtml(item.file) + '" data-architecture-line="1">' +
+      '<div><strong>' + escapeHtml(item.file) + '</strong><small>Inbound ' +
+      Number(item.inbound || 0) + ' · Outbound ' + Number(item.outbound || 0) + '</small></div>' +
+      '<span>Score ' + Number(item.score || 0) + '</span>' +
+    '</button>'
+  ).join('');
+}
+
+function renderArchitectureRisk(items) {
+  if (!items?.length) return '<p class="muted">No obvious static risk hotspots detected.</p>';
+  return items.slice(0, 8).map((item) =>
+    '<button class="architecture-row" data-architecture-file="' + escapeHtml(item.file) + '" data-architecture-line="1">' +
+      '<div><strong>' + escapeHtml(item.file) + '</strong><small>' +
+      Number(item.lines || 0) + ' lines · ' + Number(item.todoCount || 0) + ' TODO/FIXME</small></div>' +
+      '<span>Risk ' + Number(item.riskScore || 0) + '</span>' +
+    '</button>'
+  ).join('');
+}
+
+function renderArchitectureLarge(items) {
+  if (!items?.length) return '<p class="muted">No source files detected.</p>';
+  return items.slice(0, 8).map((item) =>
+    '<button class="architecture-row" data-architecture-file="' + escapeHtml(item.file) + '" data-architecture-line="1">' +
+      '<div><strong>' + escapeHtml(item.file) + '</strong><small>' +
+      Math.round(Number(item.size || 0) / 1024) + ' KB</small></div><span>' +
+      Number(item.lines || 0) + ' lines</span></button>'
+  ).join('');
+}
+
+function renderArchitectureCycles(items) {
+  if (!items?.length) return '<p class="muted">No local dependency cycles detected.</p>';
+  return items.slice(0, 5).map((cycle) =>
+    '<div class="architecture-cycle">' + cycle.map((item) => escapeHtml(item)).join(' → ') + '</div>'
+  ).join('');
+}
+
+function renderArchitectureSearch(items) {
+  if (!items?.length) return '<p class="muted">Run Find Feature to search the workspace.</p>';
+  return items.slice(0, 10).map((item) =>
+    '<button class="architecture-search-row" data-architecture-file="' + escapeHtml(item.file) +
+    '" data-architecture-line="' + Number(item.line || 1) + '">' +
+      '<div><strong>' + escapeHtml(item.file) + ':' + Number(item.line || 1) +
+      '</strong><small>' + escapeHtml(item.snippet || 'Filename match') + '</small></div>' +
+      '<span>' + Number(item.score || 0) + '</span>' +
+    '</button>'
+  ).join('');
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -5347,6 +5431,24 @@ function getDashboardHtml(state) {
   .analytics-intel{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:10px}
   .analytics-intel div{padding:10px;border:1px solid rgba(0,247,255,.09);border-radius:10px}
   .analytics-intel span{display:block;color:var(--muted);font-size:9px;margin-bottom:5px}
+  .architecture-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .architecture-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .architecture-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .architecture-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .architecture-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .architecture-stat strong{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .architecture-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .architecture-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .architecture-row,.architecture-search-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;text-align:left;margin-top:7px}
+  .architecture-row>div,.architecture-search-row>div{display:flex;flex-direction:column;min-width:0}
+  .architecture-row strong,.architecture-row small,.architecture-search-row strong,.architecture-search-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .architecture-row small,.architecture-search-row small{color:var(--muted);margin-top:3px}
+  .architecture-search-row small{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .architecture-metric-row{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .architecture-metric-row>div{display:flex;flex-direction:column}
+  .architecture-metric-row small{color:var(--muted);margin-top:3px}
+  .architecture-cycle{padding:9px;margin-top:7px;border:1px solid rgba(255,204,102,.18);border-radius:9px;color:#ffcc66;word-break:break-word}
+  .architecture-ai{margin-top:12px;padding:14px;border:1px solid rgba(255,79,216,.16);border-radius:12px;background:rgba(255,79,216,.02);white-space:pre-wrap;line-height:1.55;max-height:340px;overflow:auto}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -5485,7 +5587,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -5797,6 +5899,77 @@ function getDashboardHtml(state) {
           ${renderAnalyticsHealthHistory(state.developerAnalytics.health.recent)}
         </div>
       </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'architecture')}>
+      <div class="architecture-head">
+        <div>
+          <div class="label">WORKSPACE ARCHITECTURE INTELLIGENCE</div>
+          <h3 style="margin-bottom:4px">Structure map · dependency graph · feature navigation</h3>
+          <div class="muted">Local static analysis first. AI receives search snippets only when you explicitly choose AI Explain Matches.</div>
+        </div>
+        <div class="architecture-actions">
+          <button data-command="architectureFindFeature"><span>⌕</span>Find Feature</button>
+          <button data-command="architectureExplainMatches"><span>✦</span>AI Explain Matches</button>
+          <button data-command="refreshArchitecture"><span>↻</span>Refresh Scan</button>
+          <button data-command="exportArchitectureJson"><span>⇩</span>Export JSON</button>
+        </div>
+      </div>
+
+      ${state.architecture.scan ? `
+      <div class="architecture-summary">
+        <div class="architecture-stat"><span>SCANNED FILES</span><strong>${state.architecture.scan.totalFiles}</strong></div>
+        <div class="architecture-stat"><span>SOURCE LINES</span><strong>${state.architecture.scan.totalLines}</strong></div>
+        <div class="architecture-stat"><span>ENTRY POINTS</span><strong>${state.architecture.scan.entryPoints.length}</strong></div>
+        <div class="architecture-stat"><span>RELATIONSHIPS</span><strong>${state.architecture.scan.relationships.length}</strong></div>
+        <div class="architecture-stat"><span>CYCLES</span><strong>${state.architecture.scan.cycles.length}</strong></div>
+        <div class="architecture-stat"><span>SCAN STATUS</span><strong>${state.architecture.scan.truncated ? 'CAPPED' : 'COMPLETE'}</strong></div>
+      </div>
+
+      <div class="architecture-grid">
+        <div class="architecture-panel">
+          <div class="project-group-title">ENTRY POINTS</div>
+          ${renderArchitectureEntries(state.architecture.scan.entryPoints)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">TOP-LEVEL STRUCTURE</div>
+          ${renderArchitectureTopLevel(state.architecture.scan.topLevel)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">LANGUAGES</div>
+          ${renderArchitectureLanguages(state.architecture.scan.languages)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">CENTRAL MODULES</div>
+          ${renderArchitectureCentral(state.architecture.scan.centralModules)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">RISK HOTSPOTS</div>
+          ${renderArchitectureRisk(state.architecture.scan.riskFiles)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">LARGEST SOURCE FILES</div>
+          ${renderArchitectureLarge(state.architecture.scan.largeFiles)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">DEPENDENCY CYCLES</div>
+          ${renderArchitectureCycles(state.architecture.scan.cycles)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">FEATURE SEARCH</div>
+          ${state.architecture.search.query ? '<div class="commit-line">Query: ' + escapeHtml(state.architecture.search.query) + '</div>' : ''}
+          ${renderArchitectureSearch(state.architecture.search.results)}
+        </div>
+      </div>
+
+      ${state.architecture.search.running
+        ? '<div class="architecture-ai">Analyzing matches…</div>'
+        : state.architecture.search.error
+          ? '<div class="architecture-ai"><strong>AI error</strong>\n\n' + escapeHtml(state.architecture.search.error) + '</div>'
+          : state.architecture.search.analysis
+            ? '<div class="architecture-ai">' + escapeHtml(state.architecture.search.analysis) + '</div>'
+            : ''}
+      ` : '<p class="muted">Open a workspace folder to scan its architecture.</p>'}
     </article>
 
     <article class="card wide"${widgetAttr(state, 'cpArena')}>
@@ -6510,6 +6683,18 @@ function getDashboardHtml(state) {
     });
   });
 
+  document.querySelectorAll('[data-architecture-file]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({
+        command: 'openArchitectureFile',
+        value: {
+          file: button.dataset.architectureFile,
+          line: Number(button.dataset.architectureLine || 1)
+        }
+      });
+    });
+  });
+
   document.querySelectorAll('[data-cp-problem]').forEach((button) => {
     button.addEventListener('click', () => {
       vscode.postMessage({ command: 'cpSwitchProblem', value: button.dataset.cpProblem });
@@ -6749,6 +6934,16 @@ async function runAction(command, value, context) {
       return smartCommitGate(context, context?.extensionUri);
     case 'exportDeveloperAnalytics':
       return exportDeveloperAnalytics(context, context?.extensionUri);
+    case 'architectureFindFeature':
+      return findArchitectureFeature();
+    case 'architectureExplainMatches':
+      return explainArchitectureMatches();
+    case 'refreshArchitecture':
+      return refreshArchitectureState();
+    case 'exportArchitectureJson':
+      return exportArchitectureJson();
+    case 'openArchitectureFile':
+      return openArchitectureFile(value);
     case 'cpStartContest':
       return startCpContestPrompt(context);
     case 'cpStopContest':
@@ -7056,6 +7251,9 @@ async function openDashboard(context) {
         message.command === 'scanDependencies' ||
         message.command === 'revertLastAiApply' ||
         message.command === 'smartCommitGate' ||
+        message.command === 'architectureFindFeature' ||
+        message.command === 'architectureExplainMatches' ||
+        message.command === 'refreshArchitecture' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
