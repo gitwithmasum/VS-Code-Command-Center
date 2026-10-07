@@ -158,7 +158,10 @@ async function runWorkspaceTask(root, discovery, taskName, options = {}) {
     args,
     root,
     Math.max(1000, Number(options.timeoutMs || 180000)),
-    { maxOutput: 32000 }
+    {
+      maxOutput: 32000,
+      signal: options.signal
+    }
   );
 
   return {
@@ -168,6 +171,7 @@ async function runWorkspaceTask(root, discovery, taskName, options = {}) {
     passed: result.exitCode === 0,
     exitCode: result.exitCode,
     timedOut: result.timedOut,
+    cancelled: Boolean(result.cancelled),
     durationMs: Date.now() - startedAt,
     output: normalizeOutput(result.stdout, result.stderr)
   };
@@ -192,13 +196,18 @@ async function runTaskPlan(root, discovery, taskNames, options = {}) {
     results.push(...parallel);
   } else {
     for (const name of uniqueNames) {
+      if (options.signal?.aborted) break;
       const result = await runWorkspaceTask(root, discovery, name, options);
       results.push(result);
+      if (result.cancelled) break;
       if (!result.passed && stopOnFailure) break;
     }
   }
 
-  const passed = results.length === uniqueNames.length &&
+  const cancelled = Boolean(options.signal?.aborted) ||
+    results.some((item) => item.cancelled);
+  const passed = !cancelled &&
+    results.length === uniqueNames.length &&
     results.every((item) => item.passed);
 
   return {
@@ -207,6 +216,7 @@ async function runTaskPlan(root, discovery, taskNames, options = {}) {
     requested: uniqueNames,
     results,
     passed,
+    cancelled,
     startedAt,
     finishedAt: Date.now(),
     durationMs: Date.now() - startedAt
