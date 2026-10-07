@@ -154,6 +154,8 @@ let architectureSearchState = {
   running: false
 };
 
+let taskOrchestratorAbortController = null;
+
 let taskOrchestratorState = {
   running: false,
   name: '',
@@ -3269,9 +3271,20 @@ function getQualityGateState(context, extensionUri) {
   };
 }
 
-async function revertLastAiApply() {
+async function revertLastAiApply(extensionUri) {
   if (!lastAiApplyBackup) {
     vscode.window.showInformationMessage('No AI apply backup is available to revert.');
+    return false;
+  }
+
+  const currentRoot = getWorkspaceRoot(extensionUri);
+  if (
+    lastAiApplyBackup.workspaceRoot &&
+    path.resolve(lastAiApplyBackup.workspaceRoot) !== path.resolve(currentRoot || '')
+  ) {
+    vscode.window.showWarningMessage(
+      'The last AI Apply belongs to a different workspace, so rollback was blocked.'
+    );
     return false;
   }
 
@@ -3937,6 +3950,7 @@ async function applyAiEditProposal(context, extensionUri) {
 
     lastAiApplyBackup = {
       kind: 'created-file',
+      workspaceRoot: getWorkspaceRoot(extensionUri),
       targetPath: aiEditState.targetPath,
       appliedText: aiEditState.proposedText,
       saved: true,
@@ -3995,6 +4009,7 @@ async function applyAiEditProposal(context, extensionUri) {
 
   lastAiApplyBackup = {
     kind: 'edited-file',
+    workspaceRoot: getWorkspaceRoot(extensionUri),
     sourceUri: uri.toString(),
     originalText,
     appliedText: proposedText,
@@ -4975,7 +4990,7 @@ function renderOrchestratorResults(results) {
   if (!results?.length) return '<p class="muted">No workflow run yet.</p>';
   return results.map((item) =>
     '<div class="history-row"><div><strong>' +
-      escapeHtml(item.name) + ' · ' + (item.passed ? 'PASS' : 'FAIL') +
+      escapeHtml(item.name) + ' · ' + (item.cancelled ? 'CANCELLED' : (item.passed ? 'PASS' : 'FAIL')) +
       '</strong><small>' + escapeHtml(item.kind || 'task') + ' · Exit ' +
       Number(item.exitCode ?? -1) + '</small></div><span>' +
       Math.round(Number(item.durationMs || 0) / 1000) + 's</span></div>'
@@ -4986,7 +5001,7 @@ function renderOrchestratorHistory(history) {
   if (!history?.length) return '<p class="muted">No task-run history yet.</p>';
   return history.slice(0, 8).map((item) =>
     '<div class="history-row"><div><strong>' +
-      escapeHtml(item.name) + ' · ' + (item.passed ? 'PASS' : 'FAIL') +
+      escapeHtml(item.name) + ' · ' + (item.cancelled ? 'CANCELLED' : (item.passed ? 'PASS' : 'FAIL')) +
       '</strong><small>' + escapeHtml(new Date(Number(item.at || 0)).toLocaleString()) +
       ' · ' + escapeHtml(item.mode || 'sequential') + '</small></div><span>' +
       Math.round(Number(item.durationMs || 0) / 1000) + 's</span></div>'
@@ -5112,6 +5127,7 @@ async function recordTaskRunHistory(context, run) {
     name: String(run.name || 'Task Run'),
     mode: String(run.mode || 'sequential'),
     passed: Boolean(run.passed),
+    cancelled: Boolean(run.cancelled),
     durationMs: Number(run.durationMs || 0),
     tasks: Array.isArray(run.results)
       ? run.results.map((item) => ({
@@ -5172,6 +5188,8 @@ async function executeTaskPlan(context, extensionUri, name, taskNames, options =
     return false;
   }
 
+  taskOrchestratorAbortController = new AbortController();
+
   taskOrchestratorState = {
     running: true,
     name: String(name || 'Task Run'),
@@ -5193,9 +5211,12 @@ async function executeTaskPlan(context, extensionUri, name, taskNames, options =
     {
       mode: taskOrchestratorState.mode,
       stopOnFailure: options.stopOnFailure !== false,
-      timeoutMs: Number(options.timeoutMs || 180000)
+      timeoutMs: Number(options.timeoutMs || 180000),
+      signal: taskOrchestratorAbortController.signal
     }
   );
+
+  taskOrchestratorAbortController = null;
 
   taskOrchestratorState = {
     running: false,
@@ -5204,9 +5225,12 @@ async function executeTaskPlan(context, extensionUri, name, taskNames, options =
     requested: run.requested,
     results: run.results,
     passed: run.passed,
-    message: run.passed
-      ? 'All requested tasks passed.'
-      : 'Workflow stopped or completed with a failure.',
+    cancelled: Boolean(run.cancelled),
+    message: run.cancelled
+      ? 'Workflow cancelled by user.'
+      : run.passed
+        ? 'All requested tasks passed.'
+        : 'Workflow stopped or completed with a failure.',
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     durationMs: run.durationMs
@@ -5221,13 +5245,24 @@ async function executeTaskPlan(context, extensionUri, name, taskNames, options =
 
   vscode.window.showInformationMessage(
     'Galaxy Tasks: ' +
-    (run.passed ? 'PASS' : 'FAILED') +
+    (run.cancelled ? 'CANCELLED' : (run.passed ? 'PASS' : 'FAILED')) +
     ' · ' +
     Math.round(run.durationMs / 1000) +
     's'
   );
 
   return run.passed;
+}
+
+async function cancelTaskOrchestrator() {
+  if (!taskOrchestratorState.running || !taskOrchestratorAbortController) {
+    vscode.window.showInformationMessage('No Galaxy task workflow is currently running.');
+    return false;
+  }
+
+  taskOrchestratorAbortController.abort();
+  vscode.window.setStatusBarMessage('Galaxy task cancellation requested…', 2200);
+  return true;
 }
 
 async function runSingleWorkspaceTask(context, extensionUri, taskName) {
@@ -6510,6 +6545,7 @@ function getDashboardHtml(state) {
           <div class="muted">Auto-discovers package scripts. Sequential workflows stop on failure; parallel workflows run selected scripts together.</div>
         </div>
         <div class="orchestrator-actions">
+          ${state.taskOrchestrator.running ? '<button data-command="orchestratorCancel"><span>■</span>Cancel Run</button>' : ''}
           <button data-command="orchestratorVerify"><span>✓</span>Verify Pipeline</button>
           <button data-command="orchestratorShip"><span>⇧</span>Build → Test → Gate → Commit</button>
           <button data-command="orchestratorCreateWorkflow"><span>＋</span>Save Workflow</button>
@@ -7525,7 +7561,7 @@ async function runAction(command, value, context) {
     case 'scanDependencies':
       return scanDependencies(context?.extensionUri);
     case 'revertLastAiApply':
-      return revertLastAiApply();
+      return revertLastAiApply(context?.extensionUri);
     case 'smartCommitGate':
       return smartCommitGate(context, context?.extensionUri);
     case 'exportDeveloperAnalytics':
@@ -7540,6 +7576,8 @@ async function runAction(command, value, context) {
       return exportArchitectureJson();
     case 'orchestratorRunTask':
       return runSingleWorkspaceTask(context, context?.extensionUri, value);
+    case 'orchestratorCancel':
+      return cancelTaskOrchestrator();
     case 'orchestratorVerify':
       return runVerifyPipeline(context, context?.extensionUri);
     case 'orchestratorShip':
@@ -7863,6 +7901,7 @@ async function openDashboard(context) {
         message.command === 'architectureExplainMatches' ||
         message.command === 'refreshArchitecture' ||
         message.command === 'orchestratorRunTask' ||
+        message.command === 'orchestratorCancel' ||
         message.command === 'orchestratorVerify' ||
         message.command === 'orchestratorShip' ||
         message.command === 'orchestratorCreateWorkflow' ||
@@ -7902,6 +7941,11 @@ async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
   await migrateRecurringErrorPrivacy(context);
   captureEditorContext(vscode.window.activeTextEditor, true);
+  activeDiagnosticSignatures = new Set(
+    collectDebugDiagnostics()
+      .filter((item) => item.severity === 'Error')
+      .map((item) => diagnosticSignature(item))
+  );
 
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((event) => {
