@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.1.0
+
+- Added Workspace Architecture Intelligence.
+- Added local project structure, language, entry-point, and source-size analysis.
+- Added local dependency relationships for JS/TS, C/C++, and Python relative imports.
+- Added central-module scoring and dependency-cycle detection.
+- Added large-file and static risk-hotspot reporting.
+- Added Find Feature workspace search with direct file/line navigation.
+- Added opt-in AI Explain Matches grounded only in local search snippets.
+- Added Workspace Architecture JSON export.
+- Added scanner caps, ignored generated/vendor directories, and a 90-second architecture cache.
+- Added `src/features/architecture.js` to the prepublish syntax gate.
+
+
 ## 3.0.0
 
 - Added Developer Analytics + Project Intelligence dashboard.
