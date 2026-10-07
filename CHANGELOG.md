@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.6.0
+
+- Added Project Doctor with one-click local project health inspection.
+- Added CRITICAL / WARNING / GOOD findings with an overall 0–100 Doctor score.
+- Inspects environment availability for Git, Node.js, npm/pnpm/yarn, and Python when applicable.
+- Detects package manager and lockfile consistency, installed dependency state, and package manifest validity.
+- Reuses the explicit dependency-audit result without silently making network requests.
+- Inspects Git conflicts, upstream state, behind status, and working-tree cleanliness.
+- Checks common lint, test, and build script availability.
+- Includes current VS Code error/warning diagnostics.
+- Checks basic repository hygiene including .gitignore, README, and license files.
+- Detects sensitive-looking root filenames and reports tracked/ignored Git state without reading secret contents.
+- Added explicit Run Doctor and Scan Dependencies controls.
+- Added `src/features/project-doctor.js` and `test/project-doctor.test.js`.
+- Added Project Doctor module/tests to syntax, automated-test, and prepublish gates.
+
+
 ## 3.5.0
 
 - Added Developer Knowledge Graph with a local project-wide symbol and dependency index.
