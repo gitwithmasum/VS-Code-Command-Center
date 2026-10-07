@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.0.0
+
+- Promoted the extension to **Masum Galaxy // Developer OS** while preserving the existing extension ID for upgrade compatibility.
+- Added a unified Developer OS kernel state above the existing dashboard modules.
+- Added deterministic **OPERATIONAL / ATTENTION / DEGRADED** OS status with a weighted 0–100 score.
+- Added a module registry that summarizes Project Doctor, Quality Gate, CI Intelligence, Release Center, Developer Knowledge Graph, Architecture Intelligence, Galaxy AI Agent, Task Orchestrator, and Git Workspace state.
+- Added a four-stage boot sequence for Workspace, Health, Quality, and Delivery readiness.
+- Added priority missions that route developers into existing safe workflows based on blocked, review, or unknown module state.
+- Added direct module routing without inventing arbitrary shell commands or bypassing existing approvals.
+- Added safe **Refresh OS** cache reset for architecture, knowledge, Doctor, CI, and GitHub collaboration state.
+- Updated dashboard/panel branding to **Developer OS** while retaining existing command IDs and package name.
+- Existing AI edit, commit, push, tag, and release confirmation gates remain authoritative.
+- Added `src/features/developer-os.js` and `test/developer-os.test.js`.
+- Added Developer OS module/tests to syntax, automated-test, and prepublish gates.
+
+
 ## 3.7.0
 
 - Added Release Center with deterministic READY / REVIEW / BLOCKED / TAGGED release verdicts.

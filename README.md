@@ -1,10 +1,10 @@
-# Masum Galaxy // Command Center
+# Masum Galaxy // Developer OS
 
-A futuristic VS Code developer command center with project launching, Git insights, quick actions, terminal controls, theme switching, workspace health, and productivity tools — all in a sleek Galaxy-inspired interface.
+A local-first developer operating layer for VS Code that unifies workspace health, quality, CI, architecture, knowledge, safe AI agents, release readiness, Git workflows, analytics, and productivity in one Galaxy-inspired interface.
 
 ## Vision
 
-**Masum Galaxy // Command Center** is designed to become the central control hub for the Masum Galaxy VS Code ecosystem.
+**Masum Galaxy // Developer OS** is the central operating layer for the Masum Galaxy VS Code ecosystem.
 
 The goal is to make common developer actions easier to reach while keeping the interface clean, futuristic, and useful for everyday coding.
 
@@ -347,7 +347,50 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Includes Copy Notes, Open Releases, and next patch/minor/major suggestions
 - Never bumps package versions automatically
 
-## Planned modules
+## Masum Galaxy Developer OS — v4.0
+
+v4.0 turns the previous Command Center feature set into one unified operating layer.
+
+- **OS Kernel** summarizes the whole workspace instead of treating every feature as an isolated card
+- Overall **OPERATIONAL / ATTENTION / DEGRADED** state with a weighted 0–100 score
+- **Boot Sequence** checks Workspace → Health → Quality → Delivery
+- **Module Registry** unifies:
+  - Project Doctor
+  - Quality Gate
+  - CI Intelligence
+  - Release Center
+  - Developer Knowledge Graph
+  - Architecture Intelligence
+  - Galaxy AI Agent
+  - Task Orchestrator
+  - Git Workspace
+- **Priority Missions** route you to the most important blocked/review workflow first
+- Module/mission clicks reuse existing safe actions instead of inventing arbitrary commands
+- **Refresh OS** clears workspace intelligence caches and rebuilds state
+- Existing approval gates for AI edits, commit, push, release tags, and GitHub releases remain unchanged
+- The extension package/ID remains `masum-galaxy-command-center` so existing installations upgrade normally
+
+## Core OS modules
+
+- Developer OS Kernel
+- Project Launcher
+- Repository Control Hub
+- Project Health + Project Doctor
+- Quality Gate + Auto Verify
+- Workspace Task Orchestrator
+- CI Intelligence + Ready-to-Push
+- Workspace Architecture Intelligence
+- Developer Knowledge Graph
+- Galaxy AI Agent Mode
+- Release Center
+- Developer Analytics
+- Focus + Coding History
+- AI Debug + AI Fix Studio
+- Competitive Programming Arena
+- Theme Matrix + Developer Modes
+- Galaxy Extension Hub
+
+
 
 - Project Launcher
 - Git Control and branch status
@@ -366,13 +409,13 @@ For reliable testing, package and install the extension into normal VS Code inst
 ```powershell
 npm.cmd install
 npx.cmd vsce package
-code --install-extension .\masum-galaxy-command-center-1.2.0.vsix --force
+code --install-extension .\masum-galaxy-command-center-4.0.0.vsix --force
 ```
 
 After installation, reload VS Code and run:
 
 ```text
-Galaxy Command Center: Open Dashboard
+Masum Galaxy Developer OS: Open Dashboard
 ```
 
 The dashboard shows its installed version in the top-right status area.
@@ -396,7 +439,7 @@ Ctrl + Shift + P
 Run:
 
 ```text
-Galaxy Command Center: Open Dashboard
+Masum Galaxy Developer OS: Open Dashboard
 ```
 
 ## Project structure
@@ -427,6 +470,14 @@ Project detection, TODO counter, diagnostics, scripts, dependency status, and pr
 ### v2.0 — Galaxy Workspace OS
 
 Dev Modes, Focus Mode, extension hub, customizable widgets, Git visualizer, and deeper Galaxy ecosystem integration.
+
+### v3.0–v3.7 — Intelligence + Delivery Foundation
+
+Quality Gate, automated tests, task orchestration, CI intelligence, safe Agent Mode, Developer Knowledge Graph, Project Doctor, and Release Center.
+
+### v4.0 — Masum Galaxy Developer OS
+
+Unified OS kernel, boot sequence, module health registry, priority missions, and safe routing across the full developer lifecycle.
 
 ## Author
 

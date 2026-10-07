@@ -92,6 +92,9 @@ const {
   evaluateReleaseReadiness,
   nextVersion
 } = require('./src/features/release-center');
+const {
+  buildDeveloperOsState
+} = require('./src/features/developer-os');
 
 let lastEditorContext = {
   fileName: '',
@@ -2281,6 +2284,7 @@ function renderWorkspaceSnapshots(snapshots) {
 }
 
 const DASHBOARD_WIDGETS = [
+  { id: 'developerOs', label: 'Masum Galaxy Developer OS' },
   { id: 'health', label: 'Project Health' },
   { id: 'environment', label: 'Environment Status' },
   { id: 'server', label: 'Dev Server Monitor' },
@@ -7186,6 +7190,81 @@ function renderReleaseCenterNotes(notes) {
 }
 
 
+function getDeveloperOsState({
+  extensionUri,
+  doctor,
+  quality,
+  ci,
+  release,
+  knowledge,
+  architecture,
+  agent,
+  orchestrator
+} = {}) {
+  const root = getWorkspaceRoot(extensionUri);
+  return buildDeveloperOsState({
+    workspaceOpen: Boolean(root),
+    doctor,
+    quality,
+    ci,
+    release,
+    knowledge,
+    architecture,
+    agent,
+    orchestrator,
+    git: ci?.git || getGitPushState(root || '')
+  });
+}
+
+async function refreshDeveloperOs() {
+  architectureCache = { root: '', at: 0, scan: null };
+  knowledgeGraphCache = { root: '', at: 0, graph: null };
+  projectDoctorCache = { root: '', at: 0, report: null };
+  ciIntelligenceCache = { key: '', at: 0, value: null };
+  githubCollaborationCache = { key: '', at: 0, value: null };
+  return true;
+}
+
+function renderDeveloperOsBoot(stages) {
+  return (stages || []).map((stage) =>
+    '<div class="os-boot ' +
+      escapeHtml(String(stage.status || 'UNKNOWN').toLowerCase()) +
+      '"><span>' + escapeHtml(stage.label) + '</span><strong>' +
+      escapeHtml(stage.status || 'UNKNOWN') + '</strong><small>' +
+      escapeHtml(stage.detail || '') + '</small></div>'
+  ).join('');
+}
+
+function renderDeveloperOsModules(modules) {
+  return (modules || []).map((item) =>
+    '<button class="os-module ' +
+      escapeHtml(String(item.status || 'UNKNOWN').toLowerCase()) +
+      '" data-command="' + escapeHtml(item.action || 'refresh') + '">' +
+      '<div><strong>' + escapeHtml(item.label) +
+      '</strong><small>' + escapeHtml(item.detail || '') +
+      '</small></div><span>' + escapeHtml(item.status || 'UNKNOWN') +
+      '</span></button>'
+  ).join('');
+}
+
+function renderDeveloperOsMissions(missions) {
+  if (!missions?.length) {
+    return '<p class="muted">No active OS missions.</p>';
+  }
+
+  return missions.map((mission, index) =>
+    '<button class="os-mission ' +
+      escapeHtml(String(mission.severity || 'UNKNOWN').toLowerCase()) +
+      '" data-command="' + escapeHtml(mission.action || 'refresh') + '">' +
+      '<span class="agent-index">' + String(index + 1).padStart(2, '0') +
+      '</span><div><strong>' + escapeHtml(mission.title) +
+      '</strong><small>' + escapeHtml(mission.detail || '') +
+      '</small></div><span>' + escapeHtml(mission.severity || 'UNKNOWN') +
+      '</span></button>'
+  ).join('');
+}
+
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -7223,6 +7302,18 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     ciIntelligence,
     projectDoctor
   );
+  const agent = getGalaxyAgentState();
+  const developerOs = getDeveloperOsState({
+    extensionUri,
+    doctor: projectDoctor,
+    quality: qualityGate,
+    ci: ciIntelligence,
+    release: releaseCenter,
+    knowledge: knowledgeGraph,
+    architecture,
+    agent,
+    orchestrator: taskOrchestrator
+  });
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -7249,9 +7340,10 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     knowledgeGraph,
     projectDoctor,
     releaseCenter,
+    developerOs,
     taskOrchestrator,
     ciIntelligence,
-    agent: getGalaxyAgentState(),
+    agent,
     cpArena,
     cpAi: getCpAiState(),
     recentFiles,
@@ -7328,7 +7420,7 @@ function getDashboardHtml(state) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Masum Galaxy // Command Center</title>
+<title>Masum Galaxy // Developer OS</title>
 <style>
   :root{
     color-scheme:dark;
@@ -7535,6 +7627,26 @@ function getDashboardHtml(state) {
   .agent-status{font-size:9px;font-weight:900;text-align:right;letter-spacing:.06em}
   .agent-step.pass .agent-status{color:#64ffb4}.agent-step.failed .agent-status{color:#ff6b8a}.agent-step.running .agent-status{color:#ffcc66}.agent-step.skipped .agent-status{color:var(--muted)}
   .agent-warning{margin-top:12px;padding:10px;border:1px solid rgba(255,204,102,.16);border-radius:10px;color:#ffcc66}
+  .os-kernel{border-color:rgba(0,247,255,.38);background:linear-gradient(135deg,rgba(0,247,255,.035),rgba(139,92,255,.035));box-shadow:0 0 34px rgba(0,247,255,.035)}
+  .os-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:14px}
+  .os-status{font-size:28px;font-weight:900;letter-spacing:.08em}
+  .os-status.operational{color:#64ffb4}.os-status.attention{color:#ffcc66}.os-status.degraded{color:#ff6b8a}
+  .os-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .os-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
+  .os-stat{padding:12px;border:1px solid rgba(0,247,255,.14);border-radius:12px;background:rgba(0,247,255,.018)}
+  .os-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .os-stat strong{font-size:16px}
+  .os-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .os-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.02)}
+  .os-boot{display:grid;grid-template-columns:90px 90px minmax(0,1fr);gap:10px;padding:9px 0;border-bottom:1px solid rgba(0,247,255,.07);align-items:start}
+  .os-boot span,.os-boot small{color:var(--muted)}.os-boot small{line-height:1.4}
+  .os-boot.ready strong{color:#64ffb4}.os-boot.review strong,.os-boot.unknown strong{color:#ffcc66}.os-boot.blocked strong{color:#ff6b8a}
+  .os-module,.os-mission{display:grid;grid-template-columns:minmax(0,1fr) 84px;gap:10px;align-items:start;width:100%;text-align:left;margin-top:7px}
+  .os-module>div,.os-mission>div{display:flex;flex-direction:column;min-width:0}
+  .os-module small,.os-mission small{color:var(--muted);margin-top:4px;line-height:1.4}
+  .os-module>span,.os-mission>span:last-child{font-size:9px;font-weight:900;text-align:right;letter-spacing:.06em}
+  .os-module.ready>span,.os-mission.ready>span:last-child{color:#64ffb4}.os-module.review>span,.os-mission.review>span:last-child{color:#ffcc66}.os-module.blocked>span,.os-mission.blocked>span:last-child{color:#ff6b8a}.os-module.unknown>span,.os-mission.unknown>span:last-child{color:var(--muted)}
+  .os-mission{grid-template-columns:34px minmax(0,1fr) 84px}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -7673,7 +7785,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary,.orchestrator-summary,.ci-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid,.orchestrator-grid,.ci-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary,.orchestrator-summary,.ci-summary,.os-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid,.orchestrator-grid,.ci-grid,.os-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -7682,7 +7794,7 @@ function getDashboardHtml(state) {
   <header class="top">
     <div>
       <p class="brand">MASUM GALAXY</p>
-      <h1>// COMMAND CENTER</h1>
+      <h1>// DEVELOPER OS</h1>
     </div>
     <div class="top-actions">
       <button data-command="customizeDashboard"><span>⚙</span>Customize Dashboard</button>
@@ -7699,6 +7811,52 @@ function getDashboardHtml(state) {
   </section>
 
   <section class="grid">
+    <article class="card wide os-kernel"${widgetAttr(state, 'developerOs')}>
+      <div class="os-head">
+        <div>
+          <div class="label">MASUM GALAXY DEVELOPER OS · KERNEL</div>
+          <div class="os-status ${String(state.developerOs.status || 'DEGRADED').toLowerCase()}">${escapeHtml(state.developerOs.status || 'DEGRADED')}</div>
+          <h3 style="margin:6px 0 4px">${escapeHtml(state.developerOs.headline || 'Developer OS')}</h3>
+          <div class="muted">Unified workspace operating layer · deterministic state · existing safety gates preserved</div>
+        </div>
+        <div class="os-actions">
+          <button data-command="developerOsRefresh"><span>↻</span>Refresh OS</button>
+          <button data-command="projectDoctorRun"><span>✚</span>Doctor</button>
+          <button data-command="runQualityGate"><span>✓</span>Quality Gate</button>
+          <button data-command="ciRunReadyCheck"><span>⇧</span>Ready Check</button>
+        </div>
+      </div>
+
+      <div class="os-summary">
+        <div class="os-stat"><span>OS SCORE</span><strong>${Number(state.developerOs.score || 0)}/100</strong></div>
+        <div class="os-stat"><span>READY</span><strong>${Number(state.developerOs.counts?.ready || 0)}</strong></div>
+        <div class="os-stat"><span>REVIEW</span><strong>${Number(state.developerOs.counts?.review || 0)}</strong></div>
+        <div class="os-stat"><span>BLOCKED</span><strong>${Number(state.developerOs.counts?.blocked || 0)}</strong></div>
+        <div class="os-stat"><span>UNKNOWN</span><strong>${Number(state.developerOs.counts?.unknown || 0)}</strong></div>
+      </div>
+
+      <div class="os-grid">
+        <div class="os-panel">
+          <div class="project-group-title">BOOT SEQUENCE</div>
+          ${renderDeveloperOsBoot(state.developerOs.boot)}
+        </div>
+        <div class="os-panel">
+          <div class="project-group-title">PRIORITY MISSIONS</div>
+          ${renderDeveloperOsMissions(state.developerOs.missions)}
+        </div>
+        <div class="os-panel">
+          <div class="project-group-title">MODULE REGISTRY</div>
+          ${renderDeveloperOsModules(state.developerOs.modules)}
+        </div>
+        <div class="os-panel">
+          <div class="project-group-title">OS PRINCIPLES</div>
+          <div class="commit-line">Local state first · explicit approvals · no arbitrary shell invention.</div>
+          <div class="commit-line">Existing Agent, Git, CI, Release, and AI write confirmations stay authoritative.</div>
+          <div class="commit-line">Click any module or mission to route into its existing safe workflow.</div>
+        </div>
+      </div>
+    </article>
+
     <article class="card">
       <div class="label">MISSION CONTROL</div>
       <h2>${workspace}</h2>
@@ -9369,6 +9527,8 @@ async function runAction(command, value, context) {
       return refreshDeveloperKnowledgeGraph();
     case 'projectDoctorRun':
       return runProjectDoctor(context, context?.extensionUri);
+    case 'developerOsRefresh':
+      return refreshDeveloperOs();
     case 'releaseRunCheck':
       return runReleaseCenterCheck(context, context?.extensionUri);
     case 'releaseCopyNotes':
@@ -9607,7 +9767,7 @@ async function openDashboard(context) {
 
     const panel = vscode.window.createWebviewPanel(
       'galaxyCommandCenter',
-      'Masum Galaxy // Command Center',
+      'Masum Galaxy // Developer OS',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -9710,6 +9870,7 @@ async function openDashboard(context) {
         message.command === 'knowledgeImpact' ||
         message.command === 'knowledgeRefresh' ||
         message.command === 'projectDoctorRun' ||
+        message.command === 'developerOsRefresh' ||
         message.command === 'releaseRunCheck' ||
         message.command === 'releaseCopyNotes' ||
         message.command === 'releaseCreateTag' ||
