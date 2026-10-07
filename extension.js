@@ -5153,6 +5153,16 @@ function renderArchitectureLarge(items) {
   ).join('');
 }
 
+
+function renderArchitectureRelations(items) {
+  if (!items?.length) return '<p class="muted">No local dependency edges detected.</p>';
+  return items.slice(0, 12).map((item) =>
+    '<div class="architecture-metric-row"><div><strong>' +
+    escapeHtml(item.from) + '</strong><small>imports / includes</small></div><span>→ ' +
+    escapeHtml(item.to) + '</span></div>'
+  ).join('');
+}
+
 function renderArchitectureCycles(items) {
   if (!items?.length) return '<p class="muted">No local dependency cycles detected.</p>';
   return items.slice(0, 5).map((cycle) =>
@@ -5950,6 +5960,10 @@ function getDashboardHtml(state) {
         <div class="architecture-panel">
           <div class="project-group-title">LARGEST SOURCE FILES</div>
           ${renderArchitectureLarge(state.architecture.scan.largeFiles)}
+        </div>
+        <div class="architecture-panel">
+          <div class="project-group-title">MODULE RELATIONSHIPS</div>
+          ${renderArchitectureRelations(state.architecture.scan.relationships)}
         </div>
         <div class="architecture-panel">
           <div class="project-group-title">DEPENDENCY CYCLES</div>
