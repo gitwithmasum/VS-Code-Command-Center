@@ -114,11 +114,10 @@
   "bugs": {
     "url": "https://github.com/gitwithmasum/VS-Code-Command-Center/issues"
   },
-  "icon": "media/marketplace-icon.png",
+  "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#050817",
     "theme": "dark"
   },
   "pricing": "Free"
 }
-
