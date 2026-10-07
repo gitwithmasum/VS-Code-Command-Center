@@ -35,6 +35,12 @@ const {
   recordQualityGateHistory,
   recordProjectHealthHistory
 } = require('./src/features/analytics');
+const {
+  scanWorkspaceArchitecture,
+  searchArchitecture,
+  getArchitectureFile,
+  toArchitectureView
+} = require('./src/features/architecture');
 
 let lastEditorContext = {
   fileName: '',
@@ -115,6 +121,21 @@ let qualityGateState = {
 
 let lastAiApplyBackup = null;
 let activeDiagnosticSignatures = new Set();
+
+let architectureCache = {
+  root: '',
+  at: 0,
+  scan: null
+};
+
+let architectureSearchState = {
+  query: '',
+  results: [],
+  analysis: '',
+  model: '',
+  error: '',
+  running: false
+};
 
 let cpAiState = {
   running: false,
@@ -4896,6 +4917,177 @@ async function exportDeveloperAnalytics(context, extensionUri) {
   return true;
 }
 
+
+function getArchitectureScan(force = false) {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    architectureCache = { root: '', at: Date.now(), scan: null };
+    return null;
+  }
+
+  const fresh =
+    !force &&
+    architectureCache.scan &&
+    architectureCache.root === root &&
+    Date.now() - architectureCache.at < 90000;
+
+  if (fresh) return architectureCache.scan;
+
+  const scan = scanWorkspaceArchitecture(root, { maxFiles: 900 });
+  architectureCache = {
+    root,
+    at: Date.now(),
+    scan
+  };
+  return scan;
+}
+
+function getArchitectureDashboardState(force = false) {
+  const scan = getArchitectureScan(force);
+  return {
+    scan: toArchitectureView(scan),
+    search: { ...architectureSearchState }
+  };
+}
+
+async function refreshArchitectureState() {
+  getArchitectureScan(true);
+  architectureSearchState = {
+    query: '',
+    results: [],
+    analysis: '',
+    model: '',
+    error: '',
+    running: false
+  };
+  return true;
+}
+
+async function findArchitectureFeature() {
+  const scan = getArchitectureScan(false);
+  if (!scan) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const query = await vscode.window.showInputBox({
+    title: 'Workspace Architecture · Find Feature',
+    prompt: 'What feature, behavior, symbol, or concept are you looking for?',
+    placeHolder: 'Example: quality gate history or GitHub publish flow'
+  });
+  if (!query?.trim()) return false;
+
+  const results = searchArchitecture(scan, query.trim(), 12);
+  architectureSearchState = {
+    query: query.trim(),
+    results,
+    analysis: '',
+    model: '',
+    error: '',
+    running: false
+  };
+
+  if (!results.length) {
+    vscode.window.showInformationMessage('No strong local matches were found.');
+  }
+  return true;
+}
+
+async function explainArchitectureMatches() {
+  const scan = getArchitectureScan(false);
+  const state = architectureSearchState;
+  if (!scan || !state.query || !state.results.length) {
+    vscode.window.showInformationMessage('Run Find Feature first.');
+    return false;
+  }
+
+  architectureSearchState = {
+    ...state,
+    running: true,
+    analysis: '',
+    error: ''
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const context = state.results.slice(0, 8).map((item, index) =>
+    [
+      'Match ' + (index + 1) + ': ' + item.file + ':' + item.line,
+      item.snippet || '[filename match only]'
+    ].join('\n')
+  ).join('\n\n');
+
+  const ai = await requestGalaxyModel(
+    [
+      'A developer asked: "' + state.query + '"',
+      'Based only on these local workspace search matches, explain where the feature is most likely implemented.',
+      'Rank the most relevant files, describe each file\'s likely role, and suggest the best file to open first.',
+      'Do not invent files or code that are not present in the supplied matches.',
+      '',
+      context
+    ].join('\n'),
+    'Act as a repository navigation assistant. Ground every conclusion in the supplied local search evidence.'
+  );
+
+  architectureSearchState = {
+    ...architectureSearchState,
+    running: false,
+    analysis: ai.text,
+    model: ai.model,
+    error: ai.error
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return ai.ok;
+}
+
+async function openArchitectureFile(value) {
+  const scan = getArchitectureScan(false);
+  if (!scan) return false;
+
+  const relative = typeof value === 'string' ? value : String(value?.file || '');
+  const line = Math.max(1, Number(value?.line || 1));
+  const file = getArchitectureFile(scan, relative);
+  if (!file) {
+    vscode.window.showWarningMessage('Architecture file is no longer available. Refresh the scan.');
+    return false;
+  }
+
+  const uri = vscode.Uri.file(file.absolute);
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document, { preview: false });
+  const position = new vscode.Position(
+    Math.min(Math.max(0, line - 1), Math.max(0, document.lineCount - 1)),
+    0
+  );
+  editor.selection = new vscode.Selection(position, position);
+  editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+  return true;
+}
+
+async function exportArchitectureJson() {
+  const scan = getArchitectureScan(false);
+  if (!scan) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const root = getWorkspaceRoot();
+  const target = await vscode.window.showSaveDialog({
+    title: 'Export Workspace Architecture',
+    defaultUri: vscode.Uri.file(path.join(root, 'galaxy-workspace-architecture.json')),
+    saveLabel: 'Export Architecture',
+    filters: { 'JSON': ['json'] }
+  });
+  if (!target) return false;
+
+  await vscode.workspace.fs.writeFile(
+    target,
+    Buffer.from(JSON.stringify(toArchitectureView(scan), null, 2), 'utf8')
+  );
+  vscode.window.showInformationMessage('Workspace architecture exported.');
+  return true;
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -4916,6 +5108,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const developerAnalytics = context
     ? getDeveloperAnalytics(context, { health, cpState: cpArena })
     : null;
+  const architecture = getArchitectureDashboardState(false);
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -4938,6 +5131,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     aiEdit: getAiEditState(),
     qualityGate: getQualityGateState(context, extensionUri),
     developerAnalytics,
+    architecture,
     cpArena,
     cpAi: getCpAiState(),
     recentFiles,
