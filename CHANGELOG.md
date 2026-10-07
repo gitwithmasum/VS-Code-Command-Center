@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.2.2
+
+- Extracted Quality Gate pure logic to `src/features/quality.js`.
+- Extracted CP judge pure logic to `src/features/cp-core.js`.
+- Reduced duplicate quality/privacy/coverage logic inside `extension.js`.
+- Changed JavaScript CP execution to use the actual `node` command.
+- Added built-in Node automated tests for Quality, Orchestrator, Architecture, and CP core logic.
+- Added `npm test`.
+- Updated `vscode:prepublish` to run `npm run check && npm test`.
+- Added syntax checks for new modules and test files.
+- Excluded test files from packaged VSIX output.
+
+
 ## 3.2.1
 
 - Removed raw diagnostic-message persistence from recurring-error history and added migration for existing records.
