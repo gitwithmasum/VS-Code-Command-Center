@@ -184,6 +184,22 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - One-click New Problem File with a safe Save As flow
 - Contest timing hardening when the timer expires before a problem switch
 
+## Developer Analytics + Project Intelligence — v3.0
+
+- 7-day and 30-day active coding-time analytics
+- Coding streak and 30-day active-day count
+- 30-day language-time distribution
+- 7-day and 30-day local Git commit analytics
+- Quality Gate history with average score and READY rate
+- Daily Project Health trend with score, errors, warnings, and TODO/FIXME counts
+- Competitive-programming performance analytics with judged-run pass rate, stress-test count, average runtime, and preserved official AC history
+- New Developer Intelligence dashboard with compact activity bars and trend panels
+- Export Developer Analytics as JSON
+- Fixed active coding language tracking so analytics record the active editor language reliably
+- New CP contests preserve long-term CP run/AC history; Reset Arena still clears the CP session intentionally
+- Coding analytics are local VS Code activity data; project/Git/Quality/CP analytics are scoped to the current workspace
+- No analytics database or cloud sync is required
+
 ## Planned modules
 
 - Project Launcher
