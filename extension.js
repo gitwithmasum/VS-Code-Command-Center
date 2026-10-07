@@ -83,6 +83,10 @@ const {
   getNextAgentStep,
   isAgentPlanComplete
 } = require('./src/features/agent');
+const {
+  collectProjectDoctorSignals,
+  evaluateProjectDoctor
+} = require('./src/features/project-doctor');
 
 let lastEditorContext = {
   fileName: '',
@@ -222,6 +226,12 @@ let galaxyAgentState = {
   lastActionAt: 0
 };
 
+let projectDoctorCache = {
+  root: '',
+  at: 0,
+  report: null
+};
+
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
 
@@ -279,6 +289,8 @@ function runVersionCommand(command, args = []) {
 
 function getEnvironmentStatus() {
   const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const yarnCommand = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
   let python = runVersionCommand('python', ['--version']);
   if (python === 'Not found' && process.platform === 'win32') {
     python = runVersionCommand('py', ['--version']);
@@ -287,6 +299,8 @@ function getEnvironmentStatus() {
   return {
     node: process.version,
     npm: runVersionCommand(npmCommand, ['--version']),
+    pnpm: runVersionCommand(pnpmCommand, ['--version']),
+    yarn: runVersionCommand(yarnCommand, ['--version']),
     python,
     git: runVersionCommand('git', ['--version']).replace(/^git version\s+/i, ''),
     vscode: vscode.version
@@ -2272,6 +2286,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
   { id: 'knowledgeGraph', label: 'Developer Knowledge Graph' },
+  { id: 'projectDoctor', label: 'Project Doctor' },
   { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
   { id: 'ci', label: 'CI Intelligence + Ready to Push' },
   { id: 'agent', label: 'Galaxy AI Agent Mode' },
@@ -3209,6 +3224,12 @@ async function scanDependencies(extensionUri) {
       dependency.total > 0
         ? 'Dependency scan found ' + dependency.total + ' vulnerability report(s).'
         : 'Dependency scan found no reported vulnerabilities.'
+  };
+
+  projectDoctorCache = {
+    root: '',
+    at: 0,
+    report: null
   };
 
   if (dashboardRenderCallback) await dashboardRenderCallback();
@@ -6671,6 +6692,144 @@ async function resetGalaxyAgent() {
   return true;
 }
 
+function splitGitLines(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getSensitiveGitState(root, sensitiveFiles) {
+  const files = Array.isArray(sensitiveFiles)
+    ? sensitiveFiles.filter(Boolean).slice(0, 30)
+    : [];
+  if (!root || !files.length) {
+    return { tracked: [], ignored: [] };
+  }
+
+  const tracked = splitGitLines(
+    runGit(root, ['ls-files', '--', ...files])
+  );
+  const ignored = splitGitLines(
+    runGit(root, ['check-ignore', '--no-index', '--', ...files])
+  );
+
+  return {
+    tracked,
+    ignored
+  };
+}
+
+function getProjectDoctorReport(context, extensionUri, force = false) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    return evaluateProjectDoctor({
+      signals: {
+        root: '',
+        rootAccessible: false,
+        hasPackageJson: false,
+        lockfiles: [],
+        sensitiveFiles: []
+      },
+      environment: getEnvironmentStatus(),
+      diagnostics: { errors: 0, warnings: 0 },
+      git: { isGitRepo: false }
+    });
+  }
+
+  const fresh =
+    !force &&
+    projectDoctorCache.report &&
+    projectDoctorCache.root === root &&
+    Date.now() - projectDoctorCache.at < 60000;
+
+  if (fresh) return projectDoctorCache.report;
+
+  const signals = collectProjectDoctorSignals(root);
+  const environment = getEnvironmentStatus();
+  const tasks = discoverWorkspaceTasks(root);
+  const diagnostics = collectDebugDiagnostics();
+  const git = getGitPushState(root);
+  const sensitiveGit = getSensitiveGitState(
+    root,
+    signals.sensitiveFiles
+  );
+  const quality = getQualityGateState(context, extensionUri);
+
+  const report = evaluateProjectDoctor({
+    signals,
+    environment,
+    tasks,
+    diagnostics: {
+      errors: diagnostics.filter((item) => item.severity === 'Error').length,
+      warnings: diagnostics.filter((item) => item.severity === 'Warning').length
+    },
+    git,
+    dependency: quality.dependency || null,
+    trackedSensitiveFiles: sensitiveGit.tracked,
+    ignoredSensitiveFiles: sensitiveGit.ignored
+  });
+
+  projectDoctorCache = {
+    root,
+    at: Date.now(),
+    report
+  };
+
+  return report;
+}
+
+async function runProjectDoctor(context, extensionUri) {
+  const report = getProjectDoctorReport(context, extensionUri, true);
+  const label =
+    report.status === 'GOOD'
+      ? 'GOOD'
+      : report.status === 'WARNING'
+        ? 'WARNING'
+        : 'CRITICAL';
+
+  const message =
+    'Project Doctor: ' + label +
+    ' · score ' + Number(report.score || 0) +
+    '/100 · ' + Number(report.counts?.critical || 0) +
+    ' critical · ' + Number(report.counts?.warning || 0) +
+    ' warning.';
+
+  if (report.status === 'GOOD') {
+    vscode.window.showInformationMessage(message);
+  } else {
+    vscode.window.showWarningMessage(message);
+  }
+  return true;
+}
+
+function renderProjectDoctorFindings(findings) {
+  if (!findings?.length) {
+    return '<p class="muted">No Doctor findings yet.</p>';
+  }
+
+  const categories = Array.from(
+    new Set(findings.map((item) => item.category))
+  );
+
+  return categories.map((category) => {
+    const rows = findings
+      .filter((item) => item.category === category)
+      .map((item) =>
+        '<div class="history-row"><div><strong>' +
+          escapeHtml(item.status) + ' · ' +
+          escapeHtml(item.title) +
+          '</strong><small>' + escapeHtml(item.detail || '') +
+          '</small></div><span>' + escapeHtml(item.category) +
+          '</span></div>'
+      ).join('');
+
+    return '<div class="quality-panel"><div class="project-group-title">' +
+      escapeHtml(category) + '</div>' + rows + '</div>';
+  }).join('');
+}
+
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -6693,6 +6852,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     : null;
   const architecture = getArchitectureDashboardState(false);
   const knowledgeGraph = getDeveloperKnowledgeGraphState(false);
+  const projectDoctor = getProjectDoctorReport(context, extensionUri, false);
   const taskOrchestrator = context ? getTaskOrchestratorState(context) : null;
   const qualityGate = getQualityGateState(context, extensionUri);
   const ciIntelligence = await getCiIntelligenceState(
@@ -6725,6 +6885,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     developerAnalytics,
     architecture,
     knowledgeGraph,
+    projectDoctor,
     taskOrchestrator,
     ciIntelligence,
     agent: getGalaxyAgentState(),
@@ -7585,6 +7746,36 @@ function getDashboardHtml(state) {
         ${renderKnowledgeLayers(state.knowledgeGraph.graph.layers)}
       </div>
       ` : '<p class="muted">Open a workspace folder to build the Developer Knowledge Graph.</p>'}
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'projectDoctor')}>
+      <div class="quality-head">
+        <div>
+          <div class="label">PROJECT DOCTOR</div>
+          <div class="quality-title">
+            <span class="quality-status ${String(state.projectDoctor.status || 'WARNING').toLowerCase()}">${escapeHtml(state.projectDoctor.status || 'WARNING')}</span>
+            <strong>${Number(state.projectDoctor.score || 0)}/100</strong>
+          </div>
+          <div class="muted">Environment · package manager · dependencies · Git · scripts · diagnostics · config · security · hygiene</div>
+        </div>
+        <div class="quality-actions">
+          <button data-command="projectDoctorRun"><span>✚</span>Run Doctor</button>
+          <button data-command="scanDependencies"><span>⌁</span>Scan Dependencies</button>
+        </div>
+      </div>
+
+      <div class="quality-summary">
+        <div class="quality-box"><span>CRITICAL</span><strong>${Number(state.projectDoctor.counts?.critical || 0)}</strong></div>
+        <div class="quality-box"><span>WARNING</span><strong>${Number(state.projectDoctor.counts?.warning || 0)}</strong></div>
+        <div class="quality-box"><span>GOOD</span><strong>${Number(state.projectDoctor.counts?.good || 0)}</strong></div>
+        <div class="quality-box"><span>CHECKED</span><strong>${state.projectDoctor.checkedAt ? escapeHtml(new Date(state.projectDoctor.checkedAt).toLocaleTimeString()) : 'Never'}</strong></div>
+      </div>
+
+      <div class="quality-grid">
+        ${renderProjectDoctorFindings(state.projectDoctor.findings)}
+      </div>
+
+      <p class="muted" style="margin:12px 0 0">Doctor is local-only and never reads secret contents. Dependency audit remains an explicit network-aware action through Scan Dependencies.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'orchestrator')}>
@@ -8763,6 +8954,8 @@ async function runAction(command, value, context) {
       return inspectKnowledgeFileImpact();
     case 'knowledgeRefresh':
       return refreshDeveloperKnowledgeGraph();
+    case 'projectDoctorRun':
+      return runProjectDoctor(context, context?.extensionUri);
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -9093,6 +9286,7 @@ async function openDashboard(context) {
         message.command === 'knowledgeCallers' ||
         message.command === 'knowledgeImpact' ||
         message.command === 'knowledgeRefresh' ||
+        message.command === 'projectDoctorRun' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||

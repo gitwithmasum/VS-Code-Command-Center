@@ -319,6 +319,20 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Source code stays local; this feature does not send project content to an AI service
 - Graph results are workspace-scoped and cached for 90 seconds, with an explicit Rebuild Graph action
 
+## Project Doctor — v3.6
+
+- One-click local inspection with **CRITICAL / WARNING / GOOD** findings and a 0–100 score
+- Environment checks for Git, Node.js, npm/pnpm/yarn, and Python when relevant
+- Package-manager and lockfile consistency checks
+- Dependency-install state and the latest explicit dependency-audit result
+- Git conflict, upstream, behind, and working-tree checks
+- Common lint / test / build script checks
+- Current VS Code error and warning diagnostics
+- package.json validity and basic project configuration signals
+- Security hygiene for sensitive-looking root filenames without reading secret contents
+- Repository hygiene checks for .gitignore, README, and license files
+- Dependency audit stays explicit; Project Doctor does not silently use the network
+
 ## Planned modules
 
 - Project Launcher
