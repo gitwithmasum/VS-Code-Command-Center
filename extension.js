@@ -2231,6 +2231,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
   { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
+  { id: 'ci', label: 'CI Intelligence + Ready to Push' },
   { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
@@ -4862,6 +4863,77 @@ function getCpAiState() {
 
 
 
+
+function renderCiWorkflows(items) {
+  if (!items?.length) {
+    return '<p class="muted">No local .github/workflows YAML files detected.</p>';
+  }
+
+  return items.map((workflow) =>
+    '<div class="ci-row"><div><strong>' + escapeHtml(workflow.name) +
+    '</strong><small>' + escapeHtml(workflow.file) +
+    (workflow.jobs?.length ? ' · jobs: ' + escapeHtml(workflow.jobs.join(', ')) : '') +
+    '</small></div><span>' + Number(workflow.scriptRefs?.length || 0) +
+    ' scripts</span></div>'
+  ).join('');
+}
+
+function renderCiRuns(items) {
+  if (!items?.length) {
+    return '<p class="muted">No recent Actions run is available for this branch.</p>';
+  }
+
+  return items.slice(0, 6).map((run) =>
+    '<button class="ci-run-row" data-external-url="' + escapeHtml(run.url || '') + '">' +
+      '<div><strong>' + escapeHtml(run.name) + '</strong><small>' +
+      escapeHtml(run.branch || 'branch') + ' · ' + escapeHtml(run.event || 'event') +
+      '</small></div><span class="ci-status ' + escapeHtml(String(run.status || '').toLowerCase()) + '">' +
+      escapeHtml(run.status || 'UNKNOWN') + '</span></button>'
+  ).join('');
+}
+
+function renderCiJobs(items) {
+  if (!items?.length) {
+    return '<p class="muted">No job details loaded for the latest relevant run.</p>';
+  }
+
+  return items.slice(0, 12).map((job) =>
+    '<button class="ci-run-row" data-external-url="' + escapeHtml(job.url || '') + '">' +
+      '<div><strong>' + escapeHtml(job.name) + '</strong><small>' +
+      escapeHtml(job.rawStatus || '') + '</small></div><span class="ci-status ' +
+      escapeHtml(String(job.status || '').toLowerCase()) + '">' +
+      escapeHtml(job.status || 'UNKNOWN') + '</span></button>'
+  ).join('');
+}
+
+function renderCiMapping(mapping) {
+  const mapped = mapping?.mapped || [];
+  const missing = mapping?.missingLocal || [];
+  const localOnly = mapping?.localNotInCi || [];
+
+  return (
+    '<div class="ci-map-line"><span>Mapped in CI</span><strong>' +
+      escapeHtml(mapped.join(', ') || '—') + '</strong></div>' +
+    '<div class="ci-map-line"><span>CI refs missing locally</span><strong>' +
+      escapeHtml(missing.join(', ') || '—') + '</strong></div>' +
+    '<div class="ci-map-line"><span>Local scripts not referenced by CI</span><strong>' +
+      escapeHtml(localOnly.slice(0, 12).join(', ') || '—') + '</strong></div>'
+  );
+}
+
+function renderReadyChecks(items) {
+  if (!items?.length) {
+    return '<p class="muted">Run Ready Check to build a push-readiness verdict.</p>';
+  }
+
+  return items.map((item) =>
+    '<div class="ready-check ' + escapeHtml(String(item.status || '').toLowerCase()) + '">' +
+      '<span>' + escapeHtml(item.status || 'REVIEW') + '</span>' +
+      '<div><strong>' + escapeHtml(item.label) + '</strong><small>' +
+      escapeHtml(item.detail || '') + '</small></div></div>'
+  ).join('');
+}
+
 function renderOrchestratorTasks(tasks) {
   if (!tasks?.length) return '<p class="muted">No package.json scripts detected.</p>';
   return tasks.slice(0, 16).map((task) =>
@@ -6204,6 +6276,27 @@ function getDashboardHtml(state) {
   .orchestrator-edge{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
   .orchestrator-edge small{grid-column:1/-1;color:var(--muted)}
   .orchestrator-output{margin-top:10px;padding:12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;background:rgba(0,0,0,.2);max-height:220px;overflow:auto;white-space:pre-wrap;font-family:Consolas,'Courier New',monospace;font-size:11px}
+  .ready-push-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .ready-push-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .ready-verdict{font-size:24px;font-weight:900;letter-spacing:.08em}
+  .ready-verdict.ready{color:#64ffb4}.ready-verdict.review{color:#ffcc66}.ready-verdict.blocked{color:#ff6b8a}
+  .ci-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .ci-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .ci-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .ci-stat strong{font-size:15px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ci-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .ci-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .ci-row,.ci-run-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;align-items:center;width:100%;text-align:left;margin-top:7px}
+  .ci-row>div,.ci-run-row>div{display:flex;flex-direction:column;min-width:0}
+  .ci-row strong,.ci-row small,.ci-run-row strong,.ci-run-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ci-row small,.ci-run-row small{color:var(--muted);margin-top:3px}
+  .ci-status{font-size:10px;font-weight:800}.ci-status.pass{color:#64ffb4}.ci-status.fail{color:#ff6b8a}.ci-status.running{color:#ffcc66}
+  .ready-check{display:grid;grid-template-columns:62px minmax(0,1fr);gap:9px;align-items:start;padding:9px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .ready-check>span{font-size:9px;font-weight:900;letter-spacing:.08em}
+  .ready-check.pass>span{color:#64ffb4}.ready-check.review>span{color:#ffcc66}.ready-check.block>span{color:#ff6b8a}
+  .ready-check>div{display:flex;flex-direction:column;min-width:0}.ready-check small{color:var(--muted);margin-top:3px}
+  .ci-map-line{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .ci-map-line span{color:var(--muted)}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -6342,7 +6435,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary,.orchestrator-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid,.orchestrator-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary,.orchestrator-summary,.ci-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid,.orchestrator-grid,.ci-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -6776,6 +6869,69 @@ function getDashboardHtml(state) {
         <div class="orchestrator-panel">
           <div class="project-group-title">RUN HISTORY</div>
           ${renderOrchestratorHistory(state.taskOrchestrator.history)}
+        </div>
+      </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'ci')}>
+      <div class="ready-push-head">
+        <div>
+          <div class="label">CI INTELLIGENCE // READY-TO-PUSH CENTER</div>
+          <div class="ready-verdict ${String(state.ciIntelligence.readiness.verdict || 'REVIEW').toLowerCase()}">${escapeHtml(state.ciIntelligence.readiness.verdict || 'REVIEW')}</div>
+          <div class="muted">Local tasks + Quality Gate + Git state + GitHub Actions. Push remains explicit and always asks for confirmation.</div>
+        </div>
+        <div class="ready-push-actions">
+          <button data-command="ciRunReadyCheck"><span>✓</span>Run Ready Check</button>
+          <button data-command="ciRefresh"><span>↻</span>Refresh CI</button>
+          <button data-command="ciPushIfReady"><span>⇧</span>Push If Ready</button>
+          ${state.ciIntelligence.remote?.webUrl
+            ? '<button data-external-url="' + escapeHtml(state.ciIntelligence.remote.webUrl + '/actions') + '"><span>↗</span>Open Actions</button>'
+            : ''}
+        </div>
+      </div>
+
+      <div class="ci-summary">
+        <div class="ci-stat"><span>BRANCH</span><strong>${escapeHtml(state.ciIntelligence.git.branch || '—')}</strong></div>
+        <div class="ci-stat"><span>AHEAD / BEHIND</span><strong>↑${Number(state.ciIntelligence.git.ahead || 0)} ↓${Number(state.ciIntelligence.git.behind || 0)}</strong></div>
+        <div class="ci-stat"><span>WORKING TREE</span><strong>${state.ciIntelligence.git.clean ? 'CLEAN' : 'CHANGES'}</strong></div>
+        <div class="ci-stat"><span>QUALITY</span><strong>${escapeHtml(state.qualityGate.status || 'NOT RUN')}</strong></div>
+        <div class="ci-stat"><span>CI STATUS</span><strong>${escapeHtml(state.ciIntelligence.remote.status || 'UNKNOWN')}</strong></div>
+        <div class="ci-stat"><span>WORKFLOWS</span><strong>${state.ciIntelligence.workflows.length}</strong></div>
+      </div>
+
+      <div class="ci-grid">
+        <div class="ci-panel">
+          <div class="project-group-title">READINESS CHECKLIST</div>
+          ${renderReadyChecks(state.ciIntelligence.readiness.checks)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">LOCAL WORKFLOWS</div>
+          ${renderCiWorkflows(state.ciIntelligence.workflows)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">LOCAL ↔ CI SCRIPT MAP</div>
+          ${renderCiMapping(state.ciIntelligence.mapping)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">RECENT BRANCH RUNS</div>
+          ${state.ciIntelligence.remote.error
+            ? '<p class="muted">' + escapeHtml(state.ciIntelligence.remote.error) + '</p>'
+            : renderCiRuns(state.ciIntelligence.remote.runs)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">LATEST RUN JOBS</div>
+          ${renderCiJobs(state.ciIntelligence.remote.jobs)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">FAILING JOBS</div>
+          ${state.ciIntelligence.remote.failingJobs?.length
+            ? renderCiJobs(state.ciIntelligence.remote.failingJobs)
+            : '<p class="muted">No failing job is currently reported.</p>'}
         </div>
       </div>
     </article>
@@ -7782,6 +7938,12 @@ async function runAction(command, value, context) {
       return runSavedTaskWorkflow(context, context?.extensionUri, value);
     case 'orchestratorDeleteWorkflow':
       return deleteSavedTaskWorkflow(context, value);
+    case 'ciRefresh':
+      return refreshCiIntelligence();
+    case 'ciRunReadyCheck':
+      return runReadyToPushCheck(context, context?.extensionUri);
+    case 'ciPushIfReady':
+      return pushIfReady(context, context?.extensionUri);
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -8101,6 +8263,9 @@ async function openDashboard(context) {
         message.command === 'orchestratorCreateWorkflow' ||
         message.command === 'orchestratorRunWorkflow' ||
         message.command === 'orchestratorDeleteWorkflow' ||
+        message.command === 'ciRefresh' ||
+        message.command === 'ciRunReadyCheck' ||
+        message.command === 'ciPushIfReady' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
