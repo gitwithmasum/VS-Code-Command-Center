@@ -247,6 +247,22 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - AI rollback is blocked when the last apply belongs to a different workspace
 - Added .vscodeignore so VSIX packaging excludes old VSIX files, editor-only config, coverage, logs, and Git metadata
 
+## Modular Core + Automated Tests — v3.2.2
+
+- Extracted Quality Gate pure logic into `src/features/quality.js`
+- Extracted CP judge normalization/verdict/case logic into `src/features/cp-core.js`
+- Quality module now owns scoring, coverage normalization, staged-change fingerprinting, and diagnostic privacy migration helpers
+- CP core now owns output normalization, PASS/WA/TLE/RE mapping, multi-case splitting, and tracker-status mapping
+- JavaScript CP runner now invokes the actual `node` command instead of the VS Code extension-host executable
+- Added built-in Node test suite with no extra test-framework dependency
+- Added Quality Gate tests for READY/REVIEW/BLOCKED scoring, coverage normalization, fingerprint changes, and privacy migration
+- Added Task Orchestrator tests for package-manager detection, task classification, command-graph edges, Verify order, and Ship order
+- Added Architecture Intelligence tests for entry points, local relationships, cycles, risk hotspots, and feature search
+- Added CP core tests for output normalization, verdicts, multi-case parsing, and no auto-AC behavior
+- `npm test` runs all core tests with Node's built-in test runner
+- `vscode:prepublish` now runs syntax checks and automated tests before a VSIX can be packaged
+- Test files are excluded from the final VSIX package through `.vscodeignore`
+
 ## Planned modules
 
 - Project Launcher
