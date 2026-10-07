@@ -8,6 +8,43 @@ A local-first developer operating layer for VS Code that unifies workspace healt
 
 The goal is to make common developer actions easier to reach while keeping the interface clean, futuristic, and useful for everyday coding.
 
+## Why install it
+
+**Masum Galaxy // Developer OS** brings the full developer lifecycle into one VS Code control surface:
+
+- Project Doctor for environment, Git, dependency, diagnostics, configuration, and hygiene checks
+- Quality Gate with deterministic readiness scoring and automated verification
+- CI Intelligence + Ready-to-Push checks for GitHub Actions and local project state
+- Release Center with version, changelog, tag, CI, and release-readiness validation
+- Developer Knowledge Graph for feature/flow search, symbol callers, and file-impact analysis
+- Architecture Intelligence for project structure, dependency relationships, and navigation
+- Safe Galaxy AI Agent Mode with a fixed action catalog and explicit write confirmations
+- Workspace Task Orchestrator for package scripts and reusable verification workflows
+- Git control, developer analytics, focus tools, AI debugging, and competitive-programming utilities
+- Unified v4.0 Developer OS kernel with module health, boot status, and priority missions
+
+## Quick start
+
+1. Install **Masum Galaxy // Developer OS** from the Visual Studio Marketplace.
+2. Open any project folder in VS Code.
+3. Open the Command Palette with `Ctrl + Shift + P`.
+4. Run **Masum Galaxy Developer OS: Open Dashboard**.
+5. Start with **Project Doctor**, **Quality Gate**, or the top **Developer OS** priority mission.
+
+The extension keeps the existing identifier `gitwithmasum.masum-galaxy-command-center`, so future Marketplace updates install over the same extension.
+
+## Privacy and safety
+
+- Local project analysis stays local unless a feature explicitly requires a connected service.
+- Project Doctor does not read secret-file contents.
+- Dependency auditing is an explicit action.
+- AI Agent Mode uses a fixed safe action catalog and cannot invent arbitrary shell commands.
+- AI code changes remain proposals until you explicitly apply them.
+- Commit, push, Git tag, and GitHub release actions retain confirmation gates.
+- GitHub integration uses VS Code authentication rather than storing access tokens in extension files.
+
+For help, bug reports, and feature requests, see [SUPPORT.md](SUPPORT.md).
+
 ## v1.1 — Activity Bar + Live Git Telemetry
 
 The first milestone includes:
