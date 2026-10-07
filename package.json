@@ -1,7 +1,7 @@
 {
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
-  "description": "A futuristic VS Code developer command center with CI intelligence, ready-to-push verification, modular automated tests, task orchestration, architecture intelligence, analytics, and Git workflows.",
+  "description": "A futuristic VS Code developer command center with CI intelligence, ready-to-push checks, automated tests, task orchestration, architecture intelligence, analytics, Git workflows, and competitive-programming tools.",
   "version": "3.3.0",
   "publisher": "gitwithmasum",
   "author": {
@@ -41,7 +41,8 @@
     "ci intelligence",
     "github actions",
     "ready to push",
-    "pre push checks"
+    "pre push checks",
+    "pre push"
   ],
   "main": "./extension.js",
   "activationEvents": [
