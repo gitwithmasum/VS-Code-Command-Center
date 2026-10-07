@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const https = require('https');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 const {
   getWorkspaceRoot,
   readJsonIfExists,
@@ -14,6 +14,9 @@ const {
   remoteToWebUrl,
   detectRemoteProvider
 } = require('./src/core/git');
+const {
+  runCapturedProcess
+} = require('./src/core/process');
 const {
   getCpArenaState,
   startNewContest,
@@ -3946,68 +3949,6 @@ function getSmartTaskScripts(extensionUri) {
     .filter(Boolean);
 
   return { packageManager, scripts, available };
-}
-
-function runCapturedProcess(command, args, cwd, timeoutMs = 120000) {
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      shell: false,
-      env: process.env
-    });
-
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-
-    const append = (target, chunk) => {
-      const next = target + String(chunk || '');
-      return next.length > 24000 ? next.slice(-24000) : next;
-    };
-
-    child.stdout?.on('data', (chunk) => {
-      stdout = append(stdout, chunk);
-    });
-    child.stderr?.on('data', (chunk) => {
-      stderr = append(stderr, chunk);
-    });
-
-    child.on('error', (error) => {
-      finish({
-        exitCode: -1,
-        stdout,
-        stderr: append(stderr, error.message || String(error)),
-        timedOut: false
-      });
-    });
-
-    child.on('close', (code) => {
-      finish({
-        exitCode: Number.isInteger(code) ? code : -1,
-        stdout,
-        stderr,
-        timedOut: false
-      });
-    });
-
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
-      finish({
-        exitCode: -1,
-        stdout,
-        stderr: append(stderr, '\n[Galaxy] Task timed out and was stopped.'),
-        timedOut: true
-      });
-    }, timeoutMs);
-
-    child.on('exit', () => clearTimeout(timer));
-  });
 }
 
 function normalizeTaskOutput(stdout, stderr) {
