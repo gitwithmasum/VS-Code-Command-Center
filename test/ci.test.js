@@ -4,6 +4,7 @@ const {
   parseWorkflowScripts,
   parseWorkflowJobs,
   normalizeCiStatus,
+  normalizeBranchProtection,
   summarizeCiRuns,
   mapCiScripts,
   evaluatePushReadiness
@@ -34,6 +35,32 @@ test('CI status normalization handles pass, fail, running, and unknown', () => {
   assert.equal(normalizeCiStatus({ conclusion: 'failure' }), 'FAIL');
   assert.equal(normalizeCiStatus({ status: 'in_progress' }), 'RUNNING');
   assert.equal(normalizeCiStatus({ status: 'mystery' }), 'UNKNOWN');
+});
+
+test('branch protection normalization captures PR and status requirements', () => {
+  const protectedBranch = normalizeBranchProtection({
+    required_pull_request_reviews: {
+      required_approving_review_count: 2
+    },
+    required_status_checks: {
+      contexts: ['Galaxy CI / Check + Test']
+    },
+    enforce_admins: { enabled: true },
+    restrictions: null
+  });
+
+  assert.equal(protectedBranch.available, true);
+  assert.equal(protectedBranch.protected, true);
+  assert.equal(protectedBranch.requiresPullRequest, true);
+  assert.equal(protectedBranch.requiredReviews, 2);
+  assert.deepEqual(
+    protectedBranch.requiredStatusChecks,
+    ['Galaxy CI / Check + Test']
+  );
+
+  const unprotected = normalizeBranchProtection(null, { available: true });
+  assert.equal(unprotected.available, true);
+  assert.equal(unprotected.protected, false);
 });
 
 test('CI run summary prefers a run matching local HEAD', () => {
@@ -111,6 +138,12 @@ function baseReadyInput() {
       currentHeadCovered: false,
       error: ''
     },
+    branchProtection: {
+      available: true,
+      protected: false,
+      requiresPullRequest: false,
+      error: ''
+    },
     workflows: [{ name: 'CI' }],
     qualityFingerprintCurrent: true
   };
@@ -134,6 +167,26 @@ test('readiness blocks conflicts, behind branches, failed quality, or failed CI'
   assert.equal(result.verdict, 'BLOCKED');
   assert.ok(result.checks.some((item) => item.id === 'conflicts' && item.status === 'BLOCK'));
   assert.ok(result.checks.some((item) => item.id === 'ci' && item.status === 'BLOCK'));
+});
+
+test('readiness asks for review when protected branch requires a pull request', () => {
+  const input = baseReadyInput();
+  input.branchProtection = {
+    available: true,
+    protected: true,
+    requiresPullRequest: true,
+    requiredReviews: 1,
+    requiredStatusChecks: [],
+    error: ''
+  };
+
+  const result = evaluatePushReadiness(input);
+  assert.equal(result.verdict, 'REVIEW');
+  assert.ok(
+    result.checks.some(
+      (item) => item.id === 'branch-protection' && item.status === 'REVIEW'
+    )
+  );
 });
 
 test('readiness asks for review when CI or current verification is unavailable', () => {
