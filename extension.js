@@ -45,6 +45,13 @@ const {
   toArchitectureView
 } = require('./src/features/architecture');
 const {
+  buildKnowledgeGraph,
+  getFileImpact,
+  getSymbolCallers,
+  searchKnowledgeGraph,
+  toKnowledgeGraphView
+} = require('./src/features/knowledge-graph');
+const {
   discoverWorkspaceTasks,
   runWorkspaceTask,
   runTaskPlan,
@@ -157,6 +164,21 @@ let architectureSearchState = {
   model: '',
   error: '',
   running: false
+};
+
+let knowledgeGraphCache = {
+  root: '',
+  at: 0,
+  graph: null
+};
+
+let knowledgeGraphState = {
+  query: '',
+  results: [],
+  symbolQuery: '',
+  symbol: null,
+  callers: [],
+  impact: null
 };
 
 let taskOrchestratorAbortController = null;
@@ -2249,6 +2271,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'quality', label: 'Quality Gate + Auto Verify' },
   { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
+  { id: 'knowledgeGraph', label: 'Developer Knowledge Graph' },
   { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
   { id: 'ci', label: 'CI Intelligence + Ready to Push' },
   { id: 'agent', label: 'Galaxy AI Agent Mode' },
@@ -5620,6 +5643,203 @@ async function openArchitectureFile(value) {
   return true;
 }
 
+function getDeveloperKnowledgeGraph(force = false) {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    knowledgeGraphCache = { root: '', at: Date.now(), graph: null };
+    knowledgeGraphState = {
+      query: '',
+      results: [],
+      symbolQuery: '',
+      symbol: null,
+      callers: [],
+      impact: null
+    };
+    return null;
+  }
+
+  if (
+    knowledgeGraphCache.root &&
+    knowledgeGraphCache.root !== root
+  ) {
+    knowledgeGraphState = {
+      query: '',
+      results: [],
+      symbolQuery: '',
+      symbol: null,
+      callers: [],
+      impact: null
+    };
+  }
+
+  const fresh =
+    !force &&
+    knowledgeGraphCache.graph &&
+    knowledgeGraphCache.root === root &&
+    Date.now() - knowledgeGraphCache.at < 90000;
+
+  if (fresh) return knowledgeGraphCache.graph;
+
+  const scan = getArchitectureScan(force);
+  if (!scan) return null;
+
+  const graph = buildKnowledgeGraph(scan, { maxFiles: 700 });
+  knowledgeGraphCache = {
+    root,
+    at: Date.now(),
+    graph
+  };
+  return graph;
+}
+
+function getDeveloperKnowledgeGraphState(force = false) {
+  const graph = getDeveloperKnowledgeGraph(force);
+  return {
+    graph: toKnowledgeGraphView(graph),
+    query: knowledgeGraphState.query,
+    results: [...knowledgeGraphState.results],
+    symbolQuery: knowledgeGraphState.symbolQuery,
+    symbol: knowledgeGraphState.symbol
+      ? { ...knowledgeGraphState.symbol }
+      : null,
+    callers: [...knowledgeGraphState.callers],
+    impact: knowledgeGraphState.impact
+      ? {
+          ...knowledgeGraphState.impact,
+          dependencies: [...(knowledgeGraphState.impact.dependencies || [])],
+          directDependents: [...(knowledgeGraphState.impact.directDependents || [])],
+          impacted: [...(knowledgeGraphState.impact.impacted || [])],
+          symbols: [...(knowledgeGraphState.impact.symbols || [])]
+        }
+      : null
+  };
+}
+
+async function searchDeveloperKnowledge() {
+  const graph = getDeveloperKnowledgeGraph(false);
+  if (!graph) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const query = await vscode.window.showInputBox({
+    title: 'Developer Knowledge Graph · Find Feature / Flow',
+    prompt: 'Search a feature, flow, layer, file, or symbol',
+    placeHolder: 'Examples: authentication flow, database layer, release workflow'
+  });
+  if (!query?.trim()) return false;
+
+  const results = searchKnowledgeGraph(graph, query.trim(), 20);
+  knowledgeGraphState = {
+    ...knowledgeGraphState,
+    query: query.trim(),
+    results
+  };
+
+  if (!results.length) {
+    vscode.window.showInformationMessage(
+      'Developer Knowledge Graph found no strong local matches.'
+    );
+  }
+  return true;
+}
+
+async function findKnowledgeSymbolCallers() {
+  const graph = getDeveloperKnowledgeGraph(false);
+  if (!graph) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const query = await vscode.window.showInputBox({
+    title: 'Developer Knowledge Graph · Who Calls This?',
+    prompt: 'Enter a function or class name',
+    placeHolder: 'Example: runQualityGate'
+  });
+  if (!query?.trim()) return false;
+
+  const result = getSymbolCallers(graph, query.trim(), 40);
+  knowledgeGraphState = {
+    ...knowledgeGraphState,
+    symbolQuery: query.trim(),
+    symbol: result.symbol,
+    callers: result.callers
+  };
+
+  if (!result.symbol) {
+    vscode.window.showInformationMessage(
+      'No matching indexed symbol was found.'
+    );
+    return false;
+  }
+
+  return true;
+}
+
+async function inspectKnowledgeFileImpact() {
+  const graph = getDeveloperKnowledgeGraph(false);
+  if (!graph) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const root = getWorkspaceRoot();
+  const activeFile = vscode.window.activeTextEditor?.document?.uri?.scheme === 'file'
+    ? path.relative(
+        root,
+        vscode.window.activeTextEditor.document.uri.fsPath
+      ).split(path.sep).join('/')
+    : '';
+
+  const selected = await vscode.window.showQuickPick(
+    (graph.files || [])
+      .slice()
+      .sort((a, b) => {
+        if (a.file === activeFile) return -1;
+        if (b.file === activeFile) return 1;
+        return a.file.localeCompare(b.file);
+      })
+      .map((item) => ({
+        label: item.file,
+        description:
+          (item.file === activeFile ? 'Active file · ' : '') +
+          'in ' + Number(item.inbound || 0) +
+          ' · out ' + Number(item.outbound || 0),
+        file: item.file
+      })),
+    {
+      title: 'Developer Knowledge Graph · File Impact',
+      placeHolder: 'Choose a file to see what may be affected if it changes'
+    }
+  );
+  if (!selected) return false;
+
+  knowledgeGraphState = {
+    ...knowledgeGraphState,
+    impact: getFileImpact(graph, selected.file, 3)
+  };
+  return true;
+}
+
+async function refreshDeveloperKnowledgeGraph() {
+  knowledgeGraphCache = {
+    root: '',
+    at: 0,
+    graph: null
+  };
+  knowledgeGraphState = {
+    query: '',
+    results: [],
+    symbolQuery: '',
+    symbol: null,
+    callers: [],
+    impact: null
+  };
+  getDeveloperKnowledgeGraph(true);
+  return true;
+}
+
+
 async function exportArchitectureJson() {
   const scan = getArchitectureScan(false);
   if (!scan) {
@@ -5642,6 +5862,93 @@ async function exportArchitectureJson() {
   );
   vscode.window.showInformationMessage('Workspace architecture exported.');
   return true;
+}
+
+
+function renderKnowledgeResults(items) {
+  if (!items?.length) {
+    return '<p class="muted">Run Find Feature / Flow to explore project-wide knowledge.</p>';
+  }
+
+  return items.slice(0, 12).map((item) =>
+    '<button class="architecture-row" data-architecture-file="' +
+      escapeHtml(item.file) + '" data-architecture-line="1">' +
+      '<div><strong>' + escapeHtml(item.file) + '</strong><small>' +
+      escapeHtml((item.reasons || []).join(' · ') || 'Knowledge match') +
+      '</small></div><span>' + Number(item.score || 0) + '</span></button>'
+  ).join('');
+}
+
+function renderKnowledgeCallers(state) {
+  if (!state?.symbol) {
+    return '<p class="muted">Run Who Calls This? to inspect a function or class.</p>';
+  }
+
+  const definition =
+    '<button class="architecture-row" data-architecture-file="' +
+      escapeHtml(state.symbol.file) + '" data-architecture-line="' +
+      Number(state.symbol.line || 1) + '">' +
+      '<div><strong>' + escapeHtml(state.symbol.name) +
+      '</strong><small>' + escapeHtml(state.symbol.kind || 'symbol') +
+      ' · definition</small></div><span>' +
+      escapeHtml(state.symbol.file) + ':' +
+      Number(state.symbol.line || 1) + '</span></button>';
+
+  const callers = state.callers?.length
+    ? state.callers.slice(0, 12).map((item) =>
+        '<button class="architecture-row" data-architecture-file="' +
+          escapeHtml(item.file) + '" data-architecture-line="1">' +
+          '<div><strong>' + escapeHtml(item.file) +
+          '</strong><small>references ' + escapeHtml(state.symbol.name) +
+          ' · ' + escapeHtml(item.confidence || 'heuristic') +
+          '</small></div><span>caller</span></button>'
+      ).join('')
+    : '<p class="muted">No cross-file caller/reference was detected for this indexed symbol.</p>';
+
+  return definition + callers;
+}
+
+function renderKnowledgeImpact(impact) {
+  if (!impact) {
+    return '<p class="muted">Run File Impact to trace reverse dependencies up to three levels.</p>';
+  }
+
+  const impacted = impact.impacted?.length
+    ? impact.impacted.slice(0, 14).map((item) =>
+        '<button class="architecture-row" data-architecture-file="' +
+          escapeHtml(item.file) + '" data-architecture-line="1">' +
+          '<div><strong>' + escapeHtml(item.file) +
+          '</strong><small>potential downstream impact</small></div><span>depth ' +
+          Number(item.depth || 1) + '</span></button>'
+      ).join('')
+    : '<p class="muted">No downstream local import impact was detected.</p>';
+
+  return '<div class="commit-line"><strong>' +
+    escapeHtml(impact.file) + '</strong> · Risk ' +
+    escapeHtml(impact.risk || 'LOW') + ' · ' +
+    Number(impact.directDependents?.length || 0) +
+    ' direct dependent(s) · ' +
+    Number(impact.impacted?.length || 0) +
+    ' impacted file(s)</div>' + impacted;
+}
+
+function renderKnowledgeLayers(layers) {
+  if (!layers?.length) {
+    return '<p class="muted">No semantic project layers detected yet.</p>';
+  }
+
+  return layers.map((layer) =>
+    '<div class="architecture-panel"><div class="project-group-title">' +
+      escapeHtml(layer.label) + ' · ' + Number(layer.count || 0) +
+      '</div>' +
+      (layer.files || []).slice(0, 6).map((file) =>
+        '<button class="architecture-row" data-architecture-file="' +
+          escapeHtml(file) + '" data-architecture-line="1">' +
+          '<div><strong>' + escapeHtml(file) +
+          '</strong><small>semantic layer match</small></div><span>Open</span></button>'
+      ).join('') +
+    '</div>'
+  ).join('');
 }
 
 
@@ -6385,6 +6692,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     ? getDeveloperAnalytics(context, { health, cpState: cpArena })
     : null;
   const architecture = getArchitectureDashboardState(false);
+  const knowledgeGraph = getDeveloperKnowledgeGraphState(false);
   const taskOrchestrator = context ? getTaskOrchestratorState(context) : null;
   const qualityGate = getQualityGateState(context, extensionUri);
   const ciIntelligence = await getCiIntelligenceState(
@@ -6416,6 +6724,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     qualityGate,
     developerAnalytics,
     architecture,
+    knowledgeGraph,
     taskOrchestrator,
     ciIntelligence,
     agent: getGalaxyAgentState(),
@@ -7227,6 +7536,55 @@ function getDashboardHtml(state) {
             ? '<div class="architecture-ai">' + escapeHtml(state.architecture.search.analysis) + '</div>'
             : ''}
       ` : '<p class="muted">Open a workspace folder to scan its architecture.</p>'}
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'knowledgeGraph')}>
+      <div class="architecture-head">
+        <div>
+          <div class="label">DEVELOPER KNOWLEDGE GRAPH</div>
+          <h3 style="margin-bottom:4px">Symbols · callers · feature flows · change impact</h3>
+          <div class="muted">Local static graph only. Symbol references are heuristic and source code is not sent to AI by this feature.</div>
+        </div>
+        <div class="architecture-actions">
+          <button data-command="knowledgeSearch"><span>⌕</span>Find Feature / Flow</button>
+          <button data-command="knowledgeCallers"><span>⇢</span>Who Calls This?</button>
+          <button data-command="knowledgeImpact"><span>◎</span>File Impact</button>
+          <button data-command="knowledgeRefresh"><span>↻</span>Rebuild Graph</button>
+        </div>
+      </div>
+
+      ${state.knowledgeGraph.graph ? `
+      <div class="architecture-summary">
+        <div class="architecture-stat"><span>FILES</span><strong>${state.knowledgeGraph.graph.totalFiles}</strong></div>
+        <div class="architecture-stat"><span>SYMBOLS</span><strong>${state.knowledgeGraph.graph.totalSymbols}</strong></div>
+        <div class="architecture-stat"><span>IMPORT EDGES</span><strong>${state.knowledgeGraph.graph.totalRelations}</strong></div>
+        <div class="architecture-stat"><span>SYMBOL REFS</span><strong>${state.knowledgeGraph.graph.totalReferences}</strong></div>
+        <div class="architecture-stat"><span>LAYERS</span><strong>${state.knowledgeGraph.graph.layers.length}</strong></div>
+        <div class="architecture-stat"><span>MODE</span><strong>LOCAL</strong></div>
+      </div>
+
+      <div class="architecture-grid">
+        <div class="architecture-panel">
+          <div class="project-group-title">FEATURE / FLOW SEARCH${state.knowledgeGraph.query ? ' · ' + escapeHtml(state.knowledgeGraph.query) : ''}</div>
+          ${renderKnowledgeResults(state.knowledgeGraph.results)}
+        </div>
+
+        <div class="architecture-panel">
+          <div class="project-group-title">WHO CALLS THIS?${state.knowledgeGraph.symbolQuery ? ' · ' + escapeHtml(state.knowledgeGraph.symbolQuery) : ''}</div>
+          ${renderKnowledgeCallers(state.knowledgeGraph)}
+        </div>
+
+        <div class="architecture-panel">
+          <div class="project-group-title">CHANGE IMPACT</div>
+          ${renderKnowledgeImpact(state.knowledgeGraph.impact)}
+        </div>
+      </div>
+
+      <div class="project-group-title" style="margin-top:14px">SEMANTIC PROJECT LAYERS</div>
+      <div class="architecture-grid">
+        ${renderKnowledgeLayers(state.knowledgeGraph.graph.layers)}
+      </div>
+      ` : '<p class="muted">Open a workspace folder to build the Developer Knowledge Graph.</p>'}
     </article>
 
     <article class="card wide"${widgetAttr(state, 'orchestrator')}>
@@ -8397,6 +8755,14 @@ async function runAction(command, value, context) {
       return skipGalaxyAgentNext();
     case 'agentReset':
       return resetGalaxyAgent();
+    case 'knowledgeSearch':
+      return searchDeveloperKnowledge();
+    case 'knowledgeCallers':
+      return findKnowledgeSymbolCallers();
+    case 'knowledgeImpact':
+      return inspectKnowledgeFileImpact();
+    case 'knowledgeRefresh':
+      return refreshDeveloperKnowledgeGraph();
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -8723,6 +9089,10 @@ async function openDashboard(context) {
         message.command === 'agentRunNext' ||
         message.command === 'agentSkipNext' ||
         message.command === 'agentReset' ||
+        message.command === 'knowledgeSearch' ||
+        message.command === 'knowledgeCallers' ||
+        message.command === 'knowledgeImpact' ||
+        message.command === 'knowledgeRefresh' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
