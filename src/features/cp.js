@@ -155,7 +155,9 @@ function getCpArenaState(context) {
 async function startNewContest(context, durationMinutes = 120) {
   const minutes = Math.max(1, Math.min(720, Number(durationMinutes || 120)));
   const now = Date.now();
+  const previous = getStoredSession(context);
   const session = defaultSession();
+  session.history = Array.isArray(previous.history) ? previous.history.slice(0, 30) : [];
 
   session.contest = {
     running: true,
@@ -236,9 +238,19 @@ async function setProblemStatus(context, status) {
   const problem = session.problems[session.currentProblem];
   if (!problem) return false;
 
+  const previousStatus = problem.status;
   problem.status = status;
-  if (['WA','TLE','RE'].includes(status)) {
+  if (['WA','TLE','RE','CE'].includes(status)) {
     problem.attempts += 1;
+  }
+
+  if (status === 'AC' && previousStatus !== 'AC') {
+    pushHistory(session, {
+      type: 'official',
+      verdict: 'AC',
+      problem: session.currentProblem,
+      at: Date.now()
+    });
   }
 
   await saveSession(context, session);
