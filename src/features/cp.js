@@ -4,6 +4,12 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { getWorkspaceRoot } = require('../core/workspace');
+const {
+  normalizeOutput,
+  verdictFromResult,
+  splitCases,
+  statusFromVerdict
+} = require('./cp-core');
 
 const PROBLEM_LABELS = ['A','B','C','D','E','F','G','H'];
 const VALID_STATUSES = ['NOT STARTED','SOLVING','WA','TLE','RE','CE','AC'];
@@ -261,15 +267,6 @@ async function resetCpSession(context) {
   await saveSession(context, defaultSession());
 }
 
-function normalizeOutput(value) {
-  return String(value || '')
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/\s+$/g, ''))
-    .join('\n')
-    .trim();
-}
-
 function runProcessWithInput(command, args, cwd, input, timeoutMs = 5000) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -444,7 +441,7 @@ async function prepareProgram(document) {
       ok: true,
       language,
       run(input, timeoutMs = 5000) {
-        return runProcessWithInput(process.execPath, [filePath], cwd, input, timeoutMs);
+        return runProcessWithInput('node', [filePath], cwd, input, timeoutMs);
       },
       cleanup() {}
     };
@@ -455,18 +452,6 @@ async function prepareProgram(document) {
     error: 'Runner currently supports C/C++, Python, and JavaScript.',
     cleanup() {}
   };
-}
-
-function verdictFromResult(result, expectedOutput = '') {
-  if (result.timedOut) return 'TLE';
-  if (result.exitCode !== 0) return 'RUNTIME ERROR';
-  if (
-    String(expectedOutput || '').trim() &&
-    normalizeOutput(result.stdout) !== normalizeOutput(expectedOutput)
-  ) {
-    return 'WRONG ANSWER';
-  }
-  return 'PASS';
 }
 
 async function runCurrentFile(document, input, expectedOutput) {
@@ -505,12 +490,6 @@ async function runCurrentFile(document, input, expectedOutput) {
   } finally {
     prepared.cleanup();
   }
-}
-
-function splitCases(value) {
-  const text = String(value || '').replace(/\r\n/g, '\n').trim();
-  if (!text) return [''];
-  return text.split(/^\s*---+\s*$/m).map((item) => item.trim());
 }
 
 async function runMultipleCases(document, rawInputs, rawExpected) {
@@ -645,14 +624,6 @@ async function runStressTest(generatorDocument, bruteDocument, optimizedDocument
     brute.cleanup();
     optimized.cleanup();
   }
-}
-
-function statusFromVerdict(verdict) {
-  if (verdict === 'WRONG ANSWER' || verdict === 'MISMATCH') return 'WA';
-  if (verdict === 'TLE') return 'TLE';
-  if (verdict === 'RUNTIME ERROR') return 'RE';
-  if (verdict === 'COMPILE ERROR') return 'CE';
-  return '';
 }
 
 function pushHistory(session, entry) {
