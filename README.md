@@ -263,6 +263,29 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - `vscode:prepublish` now runs syntax checks and automated tests before a VSIX can be packaged
 - Test files are excluded from the final VSIX package through `.vscodeignore`
 
+## CI Intelligence + Ready-to-Push Center — v3.3
+
+- Detects local GitHub Actions workflows from `.github/workflows/*.yml|yaml`
+- Extracts workflow job IDs and referenced npm / pnpm / yarn scripts
+- Maps local Task Orchestrator scripts against scripts referenced by CI
+- Loads current-branch GitHub Actions runs through the existing VS Code GitHub sign-in
+- Loads job-level status for the latest relevant workflow run
+- Surfaces failing CI jobs directly in the Command Center
+- Tracks Git branch, upstream, ahead/behind, dirty state, conflicts, and commits ready to push
+- Combines Git, local task results, Quality Gate freshness, workflow presence, and GitHub Actions into READY / REVIEW / BLOCKED
+- Quality Gate must match the current Git HEAD/staged fingerprint to count as fresh
+- Run Ready Check executes available local verification tasks, then Quality Gate, then refreshes CI
+- Push If Ready refuses to push unless the readiness verdict is READY and always shows a final modal confirmation
+- Open Actions jumps directly to the repository Actions page
+- Added `src/features/ci.js` with automated CI-readiness tests
+- Added repository GitHub Actions workflow: install → syntax check → automated tests → VSIX package artifact
+
+### Ready-to-Push verdict
+
+- **READY** — no blocking Git state, current Quality Gate is fresh/READY, local verification passed, and CI baseline/current run is passing.
+- **REVIEW** — something is incomplete but not proven broken, such as no upstream, uncommitted files, missing CI result, or stale local verification.
+- **BLOCKED** — merge conflicts, branch behind upstream, failed local workflow, BLOCKED Quality Gate, or failed GitHub Actions.
+
 ## Planned modules
 
 - Project Launcher
