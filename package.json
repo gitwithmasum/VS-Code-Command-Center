@@ -1,8 +1,8 @@
 {
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
-  "description": "A futuristic VS Code developer command center with project launching, Git insights, quick actions, terminal controls, theme switching, workspace health, and productivity tools.",
-  "version": "2.9.1",
+  "description": "A futuristic VS Code developer command center with coding analytics, project intelligence, AI debugging, quality gates, Git workflows, focus tracking, and competitive-programming tools.",
+  "version": "3.0.0",
   "publisher": "gitwithmasum",
   "author": {
     "name": "Masum Billah",
@@ -24,7 +24,12 @@
     "productivity",
     "futuristic",
     "galaxy",
-    "vscode"
+    "vscode",
+    "developer analytics",
+    "project intelligence",
+    "competitive programming",
+    "ai debugging",
+    "quality gate"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -74,10 +79,10 @@
     }
   },
   "scripts": {
-    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/features/cp.js",
+    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/features/cp.js && node --check src/features/analytics.js",
     "vscode:prepublish": "npm run check",
     "package": "vsce package",
-    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-2.9.1.vsix --force"
+    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-3.0.0.vsix --force"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
