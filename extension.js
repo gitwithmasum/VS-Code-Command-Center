@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const https = require('https');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const {
   getWorkspaceRoot,
@@ -113,21 +114,27 @@ let aiEditState = {
 
 const aiPreviewDocuments = new Map();
 
-let qualityGateState = {
-  running: false,
-  status: 'NOT RUN',
-  score: 0,
-  errors: 0,
-  warnings: 0,
-  conflicts: 0,
-  checks: [],
-  beforeErrors: null,
-  afterErrors: null,
-  dependency: null,
-  coverage: null,
-  lastRunAt: 0,
-  message: ''
-};
+function createQualityGateState() {
+  return {
+    running: false,
+    status: 'NOT RUN',
+    score: 0,
+    errors: 0,
+    warnings: 0,
+    conflicts: 0,
+    checks: [],
+    beforeErrors: null,
+    afterErrors: null,
+    dependency: null,
+    coverage: null,
+    lastRunAt: 0,
+    fingerprint: '',
+    message: ''
+  };
+}
+
+let qualityGateWorkspaceKey = '';
+let qualityGateState = createQualityGateState();
 
 let lastAiApplyBackup = null;
 let activeDiagnosticSignatures = new Set();
@@ -2834,6 +2841,107 @@ async function checkCpContestCompletion(context) {
   if (dashboardRenderCallback) await dashboardRenderCallback();
 }
 
+
+function isPathInsideRoot(root, filePath) {
+  if (!root || !filePath) return false;
+  const relative = path.relative(path.resolve(root), path.resolve(filePath));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function ensureQualityGateWorkspace(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const key = root ? path.resolve(root) : '__no_workspace__';
+  if (qualityGateWorkspaceKey !== key) {
+    qualityGateWorkspaceKey = key;
+    qualityGateState = createQualityGateState();
+  }
+  return root;
+}
+
+function getQualityGateFingerprint(root) {
+  if (!root) return '';
+  const head = runGit(root, ['rev-parse', 'HEAD']) || '';
+  const staged = runGit(root, ['diff', '--cached', '--no-ext-diff', '--binary']) || '';
+  return crypto
+    .createHash('sha256')
+    .update(head + '\0' + staged)
+    .digest('hex');
+}
+
+async function guardDirtyWorkspaceFiles(root) {
+  const dirty = vscode.workspace.textDocuments.filter(
+    (document) =>
+      document.isDirty &&
+      document.uri.scheme === 'file' &&
+      isPathInsideRoot(root, document.uri.fsPath)
+  );
+
+  if (!dirty.length) return true;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Quality Gate found ' + dirty.length + ' unsaved workspace file(s). Save them before verification?',
+    { modal: true },
+    'Save All & Run'
+  );
+  if (confirm !== 'Save All & Run') return false;
+
+  for (const document of dirty) {
+    const saved = await document.save();
+    if (!saved) {
+      vscode.window.showWarningMessage(
+        'Quality Gate stopped because a workspace file could not be saved.'
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+function diagnosticPrivacyKey(item) {
+  const material = [
+    item.file || '',
+    item.source || '',
+    item.code || '',
+    item.message || ''
+  ].join('|');
+  return crypto.createHash('sha256').update(material).digest('hex');
+}
+
+async function migrateRecurringErrorPrivacy(context) {
+  if (!context) return;
+  const stored = context.globalState.get('galaxy.errorRecurrence', {}) || {};
+  const entries = Object.values(stored);
+  if (!entries.some((item) => item && Object.prototype.hasOwnProperty.call(item, 'message'))) {
+    return;
+  }
+
+  const migrated = {};
+  for (const item of entries) {
+    if (!item) continue;
+    const key = item.key && !String(item.key).includes('|')
+      ? String(item.key)
+      : diagnosticPrivacyKey(item);
+
+    const current = migrated[key] || {
+      key,
+      file: String(item.file || ''),
+      source: String(item.source || ''),
+      code: String(item.code || ''),
+      count: 0,
+      lastSeenAt: 0
+    };
+
+    current.count += Math.max(0, Number(item.count || 0));
+    current.lastSeenAt = Math.max(
+      Number(current.lastSeenAt || 0),
+      Number(item.lastSeenAt || 0)
+    );
+    migrated[key] = current;
+  }
+
+  await context.globalState.update('galaxy.errorRecurrence', migrated);
+}
+
 function getCoverageState(extensionUri) {
   const root = getWorkspaceRoot(extensionUri);
   if (!root) return null;
@@ -2851,10 +2959,15 @@ function getCoverageState(extensionUri) {
 
     const weakFiles = Object.entries(summary)
       .filter(([key]) => key !== 'total')
-      .map(([file, metrics]) => ({
-        file: path.relative(root, file) || path.basename(file),
-        lines: Number(metrics?.lines?.pct)
-      }))
+      .map(([file, metrics]) => {
+        const displayFile = path.isAbsolute(file)
+          ? (path.relative(root, file) || path.basename(file))
+          : String(file).replace(/\\/g, '/');
+        return {
+          file: displayFile,
+          lines: Number(metrics?.lines?.pct)
+        };
+      })
       .filter((item) => Number.isFinite(item.lines) && item.lines < 80)
       .sort((a, b) => a.lines - b.lines)
       .slice(0, 5);
@@ -2892,19 +3005,14 @@ async function updateErrorRecurrence(context) {
   activeDiagnosticSignatures = nextSignatures;
   if (!newlySeen.length) return;
 
+  await migrateRecurringErrorPrivacy(context);
   const stored = context.globalState.get('galaxy.errorRecurrence', {}) || {};
   for (const item of newlySeen) {
-    const key = [
-      item.file,
-      item.source || '',
-      item.code || '',
-      item.message
-    ].join('|');
+    const key = diagnosticPrivacyKey(item);
 
     const record = stored[key] || {
       key,
       file: item.file,
-      message: item.message,
       source: item.source || '',
       code: item.code || '',
       count: 0,
@@ -2979,10 +3087,20 @@ function calculateQualityGate({ errors, warnings, conflicts, checks, dependency 
 }
 
 async function runQualityGate(context, extensionUri, options = {}) {
-  const root = getWorkspaceRoot(extensionUri);
+  const root = ensureQualityGateWorkspace(extensionUri);
   if (!root) {
     vscode.window.showWarningMessage('Open a workspace folder first.');
     return false;
+  }
+
+  if (qualityGateState.running) {
+    vscode.window.showInformationMessage('Galaxy Quality Gate is already running.');
+    return false;
+  }
+
+  if (!options.skipDirtyGuard) {
+    const readyToRun = await guardDirtyWorkspaceFiles(root);
+    if (!readyToRun) return false;
   }
 
   qualityGateState = {
@@ -3043,6 +3161,7 @@ async function runQualityGate(context, extensionUri, options = {}) {
     afterErrors: errors,
     coverage,
     lastRunAt: Date.now(),
+    fingerprint: getQualityGateFingerprint(root),
     message:
       result.status === 'READY'
         ? 'All available quality checks passed.'
@@ -3062,8 +3181,13 @@ async function runQualityGate(context, extensionUri, options = {}) {
 }
 
 async function scanDependencies(extensionUri) {
-  const root = getWorkspaceRoot(extensionUri);
+  const root = ensureQualityGateWorkspace(extensionUri);
   if (!root) return false;
+
+  if (qualityGateState.running) {
+    vscode.window.showInformationMessage('Another Galaxy verification task is already running.');
+    return false;
+  }
 
   if (!fs.existsSync(path.join(root, 'package.json'))) {
     vscode.window.showInformationMessage('Dependency scan currently supports Node projects with package.json.');
@@ -3136,6 +3260,7 @@ async function scanDependencies(extensionUri) {
 }
 
 function getQualityGateState(context, extensionUri) {
+  ensureQualityGateWorkspace(extensionUri);
   return {
     ...qualityGateState,
     coverage: qualityGateState.coverage || getCoverageState(extensionUri),
@@ -3213,13 +3338,21 @@ async function revertLastAiApply() {
 }
 
 async function smartCommitGate(context, extensionUri) {
-  const root = getWorkspaceRoot(extensionUri);
+  const root = ensureQualityGateWorkspace(extensionUri);
   if (!root) return false;
 
+  const staged = runGit(root, ['diff', '--cached', '--no-ext-diff', '--unified=3']);
+  if (!staged) {
+    vscode.window.showInformationMessage('Stage changes before using Smart Commit Gate.');
+    return false;
+  }
+
+  const currentFingerprint = getQualityGateFingerprint(root);
   const fresh =
     qualityGateState.lastRunAt &&
     Date.now() - qualityGateState.lastRunAt < 15 * 60 * 1000 &&
-    qualityGateState.status === 'READY';
+    qualityGateState.status === 'READY' &&
+    qualityGateState.fingerprint === currentFingerprint;
 
   if (!fresh) {
     const ready = await runQualityGate(context, extensionUri);
@@ -3227,12 +3360,13 @@ async function smartCommitGate(context, extensionUri) {
       vscode.window.showWarningMessage('Quality Gate is not READY. Commit was blocked.');
       return false;
     }
-  }
 
-  const staged = runGit(root, ['diff', '--cached', '--no-ext-diff', '--unified=3']);
-  if (!staged) {
-    vscode.window.showInformationMessage('Stage changes before using Smart Commit Gate.');
-    return false;
+    if (qualityGateState.fingerprint !== getQualityGateFingerprint(root)) {
+      vscode.window.showWarningMessage(
+        'Staged changes changed during verification. Run Smart Commit again.'
+      );
+      return false;
+    }
   }
 
   const ai = await requestGalaxyModel(
@@ -3290,11 +3424,12 @@ function renderRecurringErrors(items) {
     return '<p class="muted">No recurring errors recorded yet.</p>';
   }
 
-  return items.map((item) =>
-    '<div class="history-row"><div><strong>' + escapeHtml(item.file) +
-    '</strong><small>' + escapeHtml(item.message) +
-    '</small></div><span>×' + Number(item.count || 0) + '</span></div>'
-  ).join('');
+  return items.map((item) => {
+    const detail = [item.source, item.code].filter(Boolean).join(' · ') || 'Diagnostic signature';
+    return '<div class="history-row"><div><strong>' + escapeHtml(item.file) +
+      '</strong><small>' + escapeHtml(detail) +
+      ' · message not stored</small></div><span>×' + Number(item.count || 0) + '</span></div>';
+  }).join('');
 }
 
 class GalaxyAiPreviewProvider {
@@ -3493,13 +3628,12 @@ async function saveAiEditProposal({
   };
 
   aiPreviewDocuments.clear();
+  const previewName = path.basename(targetPath || sourceUri || 'preview.txt');
   const originalUri = vscode.Uri.parse(
-    'galaxy-ai-preview:/original/' + proposalId + '?name=' +
-    encodeURIComponent(path.basename(targetPath || sourceUri || 'original'))
+    'galaxy-ai-preview:/original/' + proposalId + '/' + encodeURIComponent(previewName)
   );
   const proposedUri = vscode.Uri.parse(
-    'galaxy-ai-preview:/proposed/' + proposalId + '?name=' +
-    encodeURIComponent(path.basename(targetPath || sourceUri || 'proposal'))
+    'galaxy-ai-preview:/proposed/' + proposalId + '/' + encodeURIComponent(previewName)
   );
   aiPreviewDocuments.set(originalUri.toString(), originalText);
   aiPreviewDocuments.set(proposedUri.toString(), proposedText);
@@ -3539,6 +3673,8 @@ async function generateDiagnosticFixProposal() {
     'Return ONLY JSON with this exact shape:',
     '{"summary":"...","confidence":"high|medium|low","verification":["..."],"edits":[{"startLine":1,"startCharacter":0,"endLine":1,"endCharacter":0,"newText":"..."}]}',
     'Line numbers are 1-based and characters are 0-based.',
+    'Edit ranges use VS Code semantics: start is inclusive and end is exclusive.',
+    'For a whole-line replacement, endLine/endCharacter must point just after the final replaced character.',
     'Only edit lines included in the supplied numbered context.',
     'If the fix requires code outside the supplied context or you are not confident, return an empty edits array and explain why in summary.',
     '',
@@ -4048,10 +4184,18 @@ async function runSmartProjectTask(context, extensionUri, kind) {
   smartAssistantState.finishedAt = Date.now();
 
   if (result.exitCode !== 0 || /\b(error|failed|failure)\b/i.test(output)) {
-    const ai = await analyzeSmartTaskOutput(kind, chosen.script, output, result.exitCode);
-    smartAssistantState.analysis = ai.text;
-    smartAssistantState.model = ai.model;
-    smartAssistantState.lastError = ai.error;
+    const choice = await vscode.window.showWarningMessage(
+      'Galaxy captured a failed task result locally. Send the bounded captured output to your configured VS Code language model for analysis?',
+      'Analyze with AI',
+      'Keep Local'
+    );
+
+    if (choice === 'Analyze with AI') {
+      const ai = await analyzeSmartTaskOutput(kind, chosen.script, output, result.exitCode);
+      smartAssistantState.analysis = ai.text;
+      smartAssistantState.model = ai.model;
+      smartAssistantState.lastError = ai.error;
+    }
   }
 
   if (dashboardRenderCallback) await dashboardRenderCallback();
@@ -5005,6 +5149,11 @@ function getTaskOrchestratorState(context) {
 }
 
 async function executeTaskPlan(context, extensionUri, name, taskNames, options = {}) {
+  if (taskOrchestratorState.running) {
+    vscode.window.showInformationMessage('Galaxy Task Orchestrator is already running.');
+    return false;
+  }
+
   const root = getWorkspaceRoot(extensionUri);
   if (!root) {
     vscode.window.showInformationMessage('Open a workspace folder first.');
@@ -6098,7 +6247,7 @@ function getDashboardHtml(state) {
           escapeHtml(state.smartAssistant.analysis) + '</div>'
         : ''}
 
-      <p class="muted" style="margin:12px 0 0">Test/build/lint/typecheck output is analyzed only when Command Center runs that task and detects a failure. Clipboard, conflict, and staged-diff analysis run only when you click them.</p>
+      <p class="muted" style="margin:12px 0 0">Test/build/lint/typecheck output stays local after a failure unless you explicitly approve Analyze with AI. Clipboard, conflict, and staged-diff analysis also run only when you click them.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'aiFix')}>
@@ -7751,6 +7900,7 @@ async function openDashboard(context) {
 
 async function activate(context) {
   console.log('[Galaxy Command Center] Extension activated');
+  await migrateRecurringErrorPrivacy(context);
   captureEditorContext(vscode.window.activeTextEditor, true);
 
   context.subscriptions.push(
