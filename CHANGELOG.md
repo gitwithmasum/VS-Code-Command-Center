@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.2.0
+
+- Added Workspace Task Orchestrator + Command Graph.
+- Added package.json script discovery and task classification.
+- Added script dependency edges from npm/pnpm/yarn script references and npm pre-scripts.
+- Added Verify Pipeline with failure-aware sequential execution.
+- Added Ship Pipeline: Build → Test → Quality Gate → Smart Commit.
+- Added saved sequential/parallel workflows with run/delete controls.
+- Added task-run history with metadata-only persistence.
+- Added shared Windows-safe captured process runner for .cmd/.bat package-manager executables.
+- Rewired Smart Developer tasks and Quality Gate checks to use the shared process runner.
+- Added `src/core/process.js` and `src/features/orchestrator.js` to the prepublish syntax gate.
+
+
 ## 3.1.0
 
 - Added Workspace Architecture Intelligence.
