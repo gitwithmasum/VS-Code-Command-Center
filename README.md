@@ -279,6 +279,8 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Open Actions jumps directly to the repository Actions page
 - Added `src/features/ci.js` with automated CI-readiness tests
 - Added repository GitHub Actions workflow: install → syntax check → automated tests → VSIX package artifact
+- Detects GitHub branch protection for the current branch when the connected account can read it
+- Protected branches that require pull requests remain REVIEW for direct-push readiness instead of being marked READY
 
 ### Ready-to-Push verdict
 
