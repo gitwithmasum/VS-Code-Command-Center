@@ -62,6 +62,7 @@ const {
 const {
   detectLocalWorkflows,
   normalizeCiStatus,
+  normalizeBranchProtection,
   summarizeCiRuns,
   mapCiScripts,
   getGitPushState,
@@ -5700,6 +5701,32 @@ function renderArchitectureSearch(items) {
 }
 
 
+async function loadBranchProtection(base, branch, accessToken) {
+  if (!base || !branch || !accessToken) {
+    return normalizeBranchProtection(null, {
+      available: false,
+      error: 'Branch protection status is unavailable.'
+    });
+  }
+
+  try {
+    const raw = await githubApi(
+      base + '/branches/' + encodeURIComponent(branch) + '/protection',
+      accessToken
+    );
+    return normalizeBranchProtection(raw);
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (/GitHub API 404\b/.test(message)) {
+      return normalizeBranchProtection(null, { available: true });
+    }
+    return normalizeBranchProtection(null, {
+      available: false,
+      error: message || 'Unable to load branch protection status.'
+    });
+  }
+}
+
 async function getCiIntelligenceState(
   gitState,
   qualityState,
@@ -5718,6 +5745,10 @@ async function getCiIntelligenceState(
         runs: [],
         jobs: [],
         failingJobs: [],
+        branchProtection: normalizeBranchProtection(null, {
+          available: false,
+          error: 'Open a workspace folder first.'
+        }),
         error: 'Open a workspace folder first.'
       },
       readiness: {
@@ -5757,6 +5788,10 @@ async function getCiIntelligenceState(
       runs: [],
       jobs: [],
       failingJobs: [],
+      branchProtection: normalizeBranchProtection(null, {
+        available: false,
+        error: 'Current origin is not a GitHub repository.'
+      }),
       error: 'Current origin is not a GitHub repository.'
     };
   } else {
@@ -5769,6 +5804,10 @@ async function getCiIntelligenceState(
         runs: [],
         jobs: [],
         failingJobs: [],
+        branchProtection: normalizeBranchProtection(null, {
+          available: false,
+          error: 'Connect GitHub to inspect branch protection.'
+        }),
         error: 'Connect GitHub to load Actions status.'
       };
     } else {
@@ -5816,6 +5855,12 @@ async function getCiIntelligenceState(
           } catch {}
         }
 
+        const branchProtection = await loadBranchProtection(
+          base,
+          gitPush.branch,
+          session.accessToken
+        );
+
         remote = {
           available: true,
           fullName: parsed.fullName,
@@ -5823,6 +5868,7 @@ async function getCiIntelligenceState(
           ...summary,
           jobs,
           failingJobs: jobs.filter((job) => job.status === 'FAIL'),
+          branchProtection,
           error: ''
         };
       } catch (error) {
@@ -5835,6 +5881,10 @@ async function getCiIntelligenceState(
           runs: [],
           jobs: [],
           failingJobs: [],
+          branchProtection: normalizeBranchProtection(null, {
+            available: false,
+            error: 'CI status could not be loaded.'
+          }),
           error: error?.message || 'Unable to load GitHub Actions status.'
         };
       }
@@ -5857,6 +5907,7 @@ async function getCiIntelligenceState(
     quality: qualityState,
     orchestrator: orchestratorState,
     ci: remote,
+    branchProtection: remote?.branchProtection || null,
     workflows,
     qualityFingerprintCurrent
   });
@@ -6896,7 +6947,7 @@ function getDashboardHtml(state) {
         <div class="ci-stat"><span>WORKING TREE</span><strong>${state.ciIntelligence.git.clean ? 'CLEAN' : 'CHANGES'}</strong></div>
         <div class="ci-stat"><span>QUALITY</span><strong>${escapeHtml(state.qualityGate.status || 'NOT RUN')}</strong></div>
         <div class="ci-stat"><span>CI STATUS</span><strong>${escapeHtml(state.ciIntelligence.remote.status || 'UNKNOWN')}</strong></div>
-        <div class="ci-stat"><span>WORKFLOWS</span><strong>${state.ciIntelligence.workflows.length}</strong></div>
+        <div class="ci-stat"><span>PROTECTION</span><strong>${state.ciIntelligence.remote?.branchProtection?.protected ? (state.ciIntelligence.remote.branchProtection.requiresPullRequest ? 'PR REQUIRED' : 'PROTECTED') : (state.ciIntelligence.remote?.branchProtection?.available ? 'NONE' : 'UNKNOWN')}</strong></div>
       </div>
 
       <div class="ci-grid">
