@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.5.0
+
+- Added Developer Knowledge Graph with a local project-wide symbol and dependency index.
+- Added function/class symbol extraction for JavaScript/TypeScript, Python, and common compiled languages.
+- Added heuristic cross-file symbol reference detection and Who Calls This? navigation.
+- Added File Impact analysis with direct and transitive reverse-dependency tracing up to three levels.
+- Added Feature / Flow search across filenames, symbols, and semantic project layers.
+- Added semantic layer detection for Authentication, Database, API/HTTP, UI, Tests, and Configuration.
+- Added direct file navigation from Knowledge Graph results.
+- Knowledge Graph analysis stays local and does not send source code to AI.
+- Added 90-second workspace-scoped graph caching and explicit Rebuild Graph control.
+- Added `src/features/knowledge-graph.js` and `test/knowledge-graph.test.js`.
+- Added Knowledge Graph module/tests to syntax, automated-test, and prepublish gates.
+
+
 ## 3.4.0
 
 - Added Galaxy AI Agent Mode with natural-language developer goals.
