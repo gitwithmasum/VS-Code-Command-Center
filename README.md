@@ -1,5 +1,7 @@
 # Masum Galaxy // Developer OS
 
+![Masum Galaxy Developer OS](media/developer-os-banner.png)
+
 A local-first developer operating layer for VS Code that unifies workspace health, quality, CI, architecture, knowledge, safe AI agents, release readiness, Git workflows, analytics, and productivity in one Galaxy-inspired interface.
 
 ## Vision
