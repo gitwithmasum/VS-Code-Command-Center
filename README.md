@@ -200,6 +200,21 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Coding analytics are local VS Code activity data; project/Git/Quality/CP analytics are scoped to the current workspace
 - No analytics database or cloud sync is required
 
+## Workspace Architecture Intelligence — v3.1
+
+- Local workspace structure map with top-level file/line counts
+- Entry-point detection from common filenames and package.json entry fields
+- Local module relationships for JS/TS imports, C/C++ quoted includes, and Python relative imports
+- Central-module scoring using inbound/outbound local dependency links
+- Dependency-cycle detection
+- Large-source-file and static risk-hotspot panels
+- Language/file distribution across the scanned workspace
+- Find Feature search for symbols, concepts, filenames, and implementation clues
+- Search results open directly at the matched file/line
+- Optional AI Explain Matches summarizes only the local search snippets you explicitly choose to analyze
+- Export Workspace Architecture as JSON
+- Generated/vendor directories are ignored, scanning is capped, and results are cached for 90 seconds to reduce extension-host overhead
+
 ## Planned modules
 
 - Project Launcher
