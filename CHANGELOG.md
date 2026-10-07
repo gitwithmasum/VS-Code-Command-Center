@@ -14,6 +14,7 @@
 - Existing AI edit, commit, push, tag, and release confirmation gates remain authoritative.
 - Added `src/features/developer-os.js` and `test/developer-os.test.js`.
 - Added Developer OS module/tests to syntax, automated-test, and prepublish gates.
+- Prepared v4.0.0 for Marketplace launch with a 30-keyword search set, concise Marketplace description, Free pricing label, gallery banner metadata, PNG extension icon, SUPPORT.md, and tighter VSIX exclusions.
 
 
 ## 3.7.0
