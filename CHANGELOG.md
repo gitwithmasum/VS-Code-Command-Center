@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.4.0
+
+- Added Galaxy AI Agent Mode with natural-language developer goals.
+- Added AI-generated plan-only workflow with a fixed safe action whitelist.
+- Added deterministic local fallback planning when no language model is available or AI output is invalid.
+- Added step-by-step Agent execution with visible PENDING / RUNNING / PASS / FAILED / SKIPPED state.
+- Added explicit approval for verification and AI-context steps.
+- Added write-risk classification for Smart Commit and Push If Ready, while preserving their existing confirmation gates.
+- Agent does not support arbitrary shell commands or silent source edits.
+- Agent fix actions create proposals only; Apply remains a separate existing user-controlled action.
+- Agent plan state is memory-only and is not persisted.
+- Added `src/features/agent.js` and `test/agent.test.js`.
+- Added Agent module and tests to syntax, automated-test, and prepublish coverage.
+
+
 ## 3.3.1
 
 - Added GitHub branch-protection awareness to Ready-to-Push.
