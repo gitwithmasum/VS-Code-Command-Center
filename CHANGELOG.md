@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.7.0
+
+- Added Release Center with deterministic READY / REVIEW / BLOCKED / TAGGED release verdicts.
+- Added semantic-version validation and package.json ↔ package-lock.json version consistency checks.
+- Added current-version CHANGELOG.md section detection and release-notes preview/copy.
+- Added release gating for Git cleanliness/conflicts/upstream state, Quality Gate freshness, GitHub Actions coverage, and Project Doctor status.
+- Added release-tag collision detection and verification that an existing version tag points to current HEAD.
+- Added explicit Run Release Check workflow that runs local verification, Quality Gate, Project Doctor refresh, and CI refresh.
+- Added safe Create Version Tag flow with modal confirmation and separate optional tag-push confirmation.
+- Added draft GitHub release creation using verified current commit and CHANGELOG.md release notes.
+- Draft release creation requires an existing current-HEAD version tag and a separate modal confirmation.
+- Added Open Releases shortcut and next patch/minor/major version suggestions.
+- Release Center never changes package versions automatically.
+- Added `src/features/release-center.js` and `test/release-center.test.js`.
+- Added Release Center module/tests to syntax, automated-test, and prepublish gates.
+
+
 ## 3.6.0
 
 - Added Project Doctor with one-click local project health inspection.
