@@ -88,6 +88,18 @@ async function recordProjectHealthHistory(context, health) {
     dependencies: String(health.dependencies || 'N/A')
   };
 
+  const currentToday = list.find((item) => item.day === day);
+  if (
+    currentToday &&
+    Number(currentToday.score || 0) === entry.score &&
+    Number(currentToday.errors || 0) === entry.errors &&
+    Number(currentToday.warnings || 0) === entry.warnings &&
+    Number(currentToday.todos || 0) === entry.todos &&
+    String(currentToday.dependencies || '') === entry.dependencies
+  ) {
+    return;
+  }
+
   const next = [
     entry,
     ...list.filter((item) => item.day !== day)
@@ -271,6 +283,9 @@ function aggregateCp(cpState) {
   const passes = judged.filter((item) => item.verdict === 'PASS').length;
   const failures = judged.length - passes;
   const stressRuns = history.filter((item) => item.type === 'stress').length;
+  const accepted = history.filter(
+    (item) => item.type === 'official' && item.verdict === 'AC'
+  ).length;
   const solved = Array.isArray(cpState?.problems)
     ? cpState.problems.filter((item) => item.status === 'AC').length
     : 0;
@@ -292,6 +307,7 @@ function aggregateCp(cpState) {
     failures,
     passRate: judged.length ? Math.round((passes / judged.length) * 100) : 0,
     stressRuns,
+    accepted,
     solved,
     averageRuntimeMs
   };
