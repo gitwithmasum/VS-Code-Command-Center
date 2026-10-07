@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.1
+
+- Added GitHub branch-protection awareness to Ready-to-Push.
+- Detects protected current branches and pull-request requirements when GitHub exposes the protection endpoint.
+- Protected branches that require a pull request now produce REVIEW instead of READY for direct push.
+- Shows branch-protection state in the CI Intelligence summary.
+- Added automated tests for branch-protection normalization and readiness behavior.
+
 ## 3.3.0
 
 - Added CI Intelligence + Ready-to-Push Center.
