@@ -2224,6 +2224,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'quality', label: 'Quality Gate + Auto Verify' },
   { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
+  { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
   { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
@@ -4791,6 +4792,63 @@ function getCpAiState() {
 }
 
 
+
+function renderOrchestratorTasks(tasks) {
+  if (!tasks?.length) return '<p class="muted">No package.json scripts detected.</p>';
+  return tasks.slice(0, 16).map((task) =>
+    '<button class="orchestrator-task" data-orchestrator-task="' + escapeHtml(task.name) + '">' +
+      '<div><strong>' + escapeHtml(task.name) + '</strong><small>' +
+      escapeHtml(task.kind) + ' · ' + escapeHtml(task.command) + '</small></div>' +
+      '<span>Run</span>' +
+    '</button>'
+  ).join('');
+}
+
+function renderOrchestratorGraph(edges) {
+  if (!edges?.length) return '<p class="muted">No script-to-script dependencies detected.</p>';
+  return edges.slice(0, 16).map((edge) =>
+    '<div class="orchestrator-edge"><strong>' + escapeHtml(edge.from) +
+    '</strong><span>→</span><strong>' + escapeHtml(edge.to) +
+    '</strong><small>' + escapeHtml(edge.reason || '') + '</small></div>'
+  ).join('');
+}
+
+function renderSavedWorkflows(workflows) {
+  if (!workflows?.length) return '<p class="muted">No saved workflows yet.</p>';
+  return workflows.map((workflow) =>
+    '<div class="orchestrator-workflow"><div><strong>' +
+      escapeHtml(workflow.name) + '</strong><small>' +
+      escapeHtml(workflow.mode) + ' · ' +
+      escapeHtml((workflow.tasks || []).join(' → ')) +
+      '</small></div><div class="launcher-actions">' +
+      '<button data-run-workflow="' + escapeHtml(workflow.id) + '">Run</button>' +
+      '<button data-delete-workflow="' + escapeHtml(workflow.id) + '">Delete</button>' +
+      '</div></div>'
+  ).join('');
+}
+
+function renderOrchestratorResults(results) {
+  if (!results?.length) return '<p class="muted">No workflow run yet.</p>';
+  return results.map((item) =>
+    '<div class="history-row"><div><strong>' +
+      escapeHtml(item.name) + ' · ' + (item.passed ? 'PASS' : 'FAIL') +
+      '</strong><small>' + escapeHtml(item.kind || 'task') + ' · Exit ' +
+      Number(item.exitCode ?? -1) + '</small></div><span>' +
+      Math.round(Number(item.durationMs || 0) / 1000) + 's</span></div>'
+  ).join('');
+}
+
+function renderOrchestratorHistory(history) {
+  if (!history?.length) return '<p class="muted">No task-run history yet.</p>';
+  return history.slice(0, 8).map((item) =>
+    '<div class="history-row"><div><strong>' +
+      escapeHtml(item.name) + ' · ' + (item.passed ? 'PASS' : 'FAIL') +
+      '</strong><small>' + escapeHtml(new Date(Number(item.at || 0)).toLocaleString()) +
+      ' · ' + escapeHtml(item.mode || 'sequential') + '</small></div><span>' +
+      Math.round(Number(item.durationMs || 0) / 1000) + 's</span></div>'
+  ).join('');
+}
+
 function analyticsDayLabel(value) {
   const text = String(value || '');
   return text.length >= 10 ? text.slice(5) : text;
@@ -5753,6 +5811,21 @@ function getDashboardHtml(state) {
   .architecture-metric-row small{color:var(--muted);margin-top:3px}
   .architecture-cycle{padding:9px;margin-top:7px;border:1px solid rgba(255,204,102,.18);border-radius:9px;color:#ffcc66;word-break:break-word}
   .architecture-ai{margin-top:12px;padding:14px;border:1px solid rgba(255,79,216,.16);border-radius:12px;background:rgba(255,79,216,.02);white-space:pre-wrap;line-height:1.55;max-height:340px;overflow:auto}
+  .orchestrator-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .orchestrator-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .orchestrator-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .orchestrator-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .orchestrator-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .orchestrator-stat strong{font-size:16px}
+  .orchestrator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .orchestrator-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .orchestrator-task,.orchestrator-workflow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;align-items:center;width:100%;text-align:left;margin-top:7px}
+  .orchestrator-task>div,.orchestrator-workflow>div:first-child{display:flex;flex-direction:column;min-width:0}
+  .orchestrator-task strong,.orchestrator-task small,.orchestrator-workflow strong,.orchestrator-workflow small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .orchestrator-task small,.orchestrator-workflow small{color:var(--muted);margin-top:3px}
+  .orchestrator-edge{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .orchestrator-edge small{grid-column:1/-1;color:var(--muted)}
+  .orchestrator-output{margin-top:10px;padding:12px;border:1px solid rgba(0,247,255,.1);border-radius:10px;background:rgba(0,0,0,.2);max-height:220px;overflow:auto;white-space:pre-wrap;font-family:Consolas,'Courier New',monospace;font-size:11px}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -5891,7 +5964,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary,.architecture-summary,.orchestrator-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid,.architecture-grid,.orchestrator-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -6278,6 +6351,54 @@ function getDashboardHtml(state) {
             ? '<div class="architecture-ai">' + escapeHtml(state.architecture.search.analysis) + '</div>'
             : ''}
       ` : '<p class="muted">Open a workspace folder to scan its architecture.</p>'}
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'orchestrator')}>
+      <div class="orchestrator-head">
+        <div>
+          <div class="label">WORKSPACE TASK ORCHESTRATOR</div>
+          <h3 style="margin-bottom:4px">Command graph · saved workflows · failure-aware pipelines</h3>
+          <div class="muted">Auto-discovers package scripts. Sequential workflows stop on failure; parallel workflows run selected scripts together.</div>
+        </div>
+        <div class="orchestrator-actions">
+          <button data-command="orchestratorVerify"><span>✓</span>Verify Pipeline</button>
+          <button data-command="orchestratorShip"><span>⇧</span>Build → Test → Gate → Commit</button>
+          <button data-command="orchestratorCreateWorkflow"><span>＋</span>Save Workflow</button>
+        </div>
+      </div>
+
+      <div class="orchestrator-summary">
+        <div class="orchestrator-stat"><span>PACKAGE MANAGER</span><strong>${escapeHtml(state.taskOrchestrator.discovery.packageManager || '—')}</strong></div>
+        <div class="orchestrator-stat"><span>DISCOVERED TASKS</span><strong>${state.taskOrchestrator.discovery.tasks.length}</strong></div>
+        <div class="orchestrator-stat"><span>GRAPH EDGES</span><strong>${state.taskOrchestrator.discovery.edges.length}</strong></div>
+        <div class="orchestrator-stat"><span>SAVED WORKFLOWS</span><strong>${state.taskOrchestrator.workflows.length}</strong></div>
+        <div class="orchestrator-stat"><span>STATUS</span><strong>${state.taskOrchestrator.running ? 'RUNNING…' : (state.taskOrchestrator.passed === null ? 'IDLE' : (state.taskOrchestrator.passed ? 'PASS' : 'FAILED'))}</strong></div>
+      </div>
+
+      <div class="orchestrator-grid">
+        <div class="orchestrator-panel">
+          <div class="project-group-title">DISCOVERED SCRIPTS</div>
+          ${renderOrchestratorTasks(state.taskOrchestrator.discovery.tasks)}
+        </div>
+        <div class="orchestrator-panel">
+          <div class="project-group-title">COMMAND GRAPH</div>
+          ${renderOrchestratorGraph(state.taskOrchestrator.discovery.edges)}
+        </div>
+        <div class="orchestrator-panel">
+          <div class="project-group-title">SAVED WORKFLOWS</div>
+          ${renderSavedWorkflows(state.taskOrchestrator.workflows)}
+        </div>
+        <div class="orchestrator-panel">
+          <div class="project-group-title">LAST RUN</div>
+          ${state.taskOrchestrator.name ? '<div class="commit-line">' + escapeHtml(state.taskOrchestrator.name) + ' · ' + escapeHtml(state.taskOrchestrator.mode || '') + ' · ' + Math.round(Number(state.taskOrchestrator.durationMs || 0) / 1000) + 's</div>' : ''}
+          ${renderOrchestratorResults(state.taskOrchestrator.results)}
+          ${state.taskOrchestrator.results?.length ? '<div class="project-group-title" style="margin-top:10px">LAST OUTPUT</div><div class="orchestrator-output">' + escapeHtml(state.taskOrchestrator.results[state.taskOrchestrator.results.length - 1]?.output || '[no output]') + '</div>' : ''}
+        </div>
+        <div class="orchestrator-panel">
+          <div class="project-group-title">RUN HISTORY</div>
+          ${renderOrchestratorHistory(state.taskOrchestrator.history)}
+        </div>
+      </div>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'cpArena')}>
@@ -6991,6 +7112,24 @@ function getDashboardHtml(state) {
     });
   });
 
+  document.querySelectorAll('[data-orchestrator-task]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'orchestratorRunTask', value: button.dataset.orchestratorTask });
+    });
+  });
+
+  document.querySelectorAll('[data-run-workflow]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'orchestratorRunWorkflow', value: button.dataset.runWorkflow });
+    });
+  });
+
+  document.querySelectorAll('[data-delete-workflow]').forEach((button) => {
+    button.addEventListener('click', () => {
+      vscode.postMessage({ command: 'orchestratorDeleteWorkflow', value: button.dataset.deleteWorkflow });
+    });
+  });
+
   document.querySelectorAll('[data-architecture-file]').forEach((button) => {
     button.addEventListener('click', () => {
       vscode.postMessage({
@@ -7250,6 +7389,18 @@ async function runAction(command, value, context) {
       return refreshArchitectureState();
     case 'exportArchitectureJson':
       return exportArchitectureJson();
+    case 'orchestratorRunTask':
+      return runSingleWorkspaceTask(context, context?.extensionUri, value);
+    case 'orchestratorVerify':
+      return runVerifyPipeline(context, context?.extensionUri);
+    case 'orchestratorShip':
+      return runShipPipeline(context, context?.extensionUri);
+    case 'orchestratorCreateWorkflow':
+      return createSavedTaskWorkflow(context);
+    case 'orchestratorRunWorkflow':
+      return runSavedTaskWorkflow(context, context?.extensionUri, value);
+    case 'orchestratorDeleteWorkflow':
+      return deleteSavedTaskWorkflow(context, value);
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -7562,6 +7713,12 @@ async function openDashboard(context) {
         message.command === 'architectureFindFeature' ||
         message.command === 'architectureExplainMatches' ||
         message.command === 'refreshArchitecture' ||
+        message.command === 'orchestratorRunTask' ||
+        message.command === 'orchestratorVerify' ||
+        message.command === 'orchestratorShip' ||
+        message.command === 'orchestratorCreateWorkflow' ||
+        message.command === 'orchestratorRunWorkflow' ||
+        message.command === 'orchestratorDeleteWorkflow' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
