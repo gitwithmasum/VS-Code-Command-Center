@@ -230,6 +230,23 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Windows command execution uses the system command processor only for .cmd/.bat executables while keeping shell=false for arbitrary commands
 - Task results capture exit code, timeout state, duration, and bounded stdout/stderr
 
+## Stability + Privacy Hardening — v3.2.1
+
+- Recurring diagnostic history no longer stores raw diagnostic messages
+- Existing raw diagnostic recurrence records are migrated on activation
+- Quality Gate state resets when the active workspace changes
+- Quality Gate blocks duplicate runs and prompts to save dirty workspace files first
+- Smart Commit freshness now fingerprints staged changes instead of trusting time alone
+- Smart Commit reruns verification when staged content changes
+- Coverage weak-file paths now handle absolute and relative coverage keys correctly
+- Failed task output stays local unless you explicitly approve AI analysis
+- AI Fix edit prompts now define VS Code end-exclusive range semantics
+- AI diff preview URIs preserve source filename extensions for better syntax highlighting
+- Task Orchestrator supports Cancel Run and propagates cancellation through captured processes
+- Startup diagnostics initialize recurrence signatures to avoid false recurrence increments
+- AI rollback is blocked when the last apply belongs to a different workspace
+- Added .vscodeignore so VSIX packaging excludes old VSIX files, editor-only config, coverage, logs, and Git metadata
+
 ## Planned modules
 
 - Project Launcher
