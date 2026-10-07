@@ -108,6 +108,43 @@ function normalizeCiStatus(run) {
   return 'UNKNOWN';
 }
 
+function normalizeBranchProtection(raw, options = {}) {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      available: options.available === true,
+      protected: false,
+      requiresPullRequest: false,
+      requiredReviews: 0,
+      requiredStatusChecks: [],
+      enforceAdmins: false,
+      restrictPushes: false,
+      error: String(options.error || '')
+    };
+  }
+
+  const reviewRule = raw.required_pull_request_reviews || null;
+  const statusRule = raw.required_status_checks || null;
+  const contexts = Array.isArray(statusRule?.contexts)
+    ? statusRule.contexts
+    : Array.isArray(statusRule?.checks)
+      ? statusRule.checks.map((item) => item?.context).filter(Boolean)
+      : [];
+
+  return {
+    available: true,
+    protected: true,
+    requiresPullRequest: Boolean(reviewRule),
+    requiredReviews: Math.max(
+      0,
+      Number(reviewRule?.required_approving_review_count || 0)
+    ),
+    requiredStatusChecks: Array.from(new Set(contexts.map(String))).slice(0, 30),
+    enforceAdmins: Boolean(raw.enforce_admins?.enabled),
+    restrictPushes: Boolean(raw.restrictions),
+    error: ''
+  };
+}
+
 function summarizeCiRuns(runs, branch, localHeadSha = '') {
   const items = (Array.isArray(runs) ? runs : [])
     .filter((run) => !branch || run.head_branch === branch)
@@ -238,6 +275,7 @@ function evaluatePushReadiness({
   quality,
   orchestrator,
   ci,
+  branchProtection = null,
   workflows = [],
   qualityFingerprintCurrent = false,
   now = Date.now()
@@ -285,6 +323,38 @@ function evaluatePushReadiness({
     add('ahead', 'Commits to push', 'REVIEW', 'No local commit is ahead of upstream.');
   } else {
     add('ahead', 'Commits to push', 'PASS', String(git?.ahead || 1) + ' commit(s) ready to push.');
+  }
+
+  if (branchProtection?.available === false && branchProtection?.error) {
+    add(
+      'branch-protection',
+      'Branch protection',
+      'REVIEW',
+      'Branch protection status is unavailable: ' + branchProtection.error
+    );
+  } else if (branchProtection?.protected) {
+    if (branchProtection.requiresPullRequest) {
+      add(
+        'branch-protection',
+        'Branch protection',
+        'REVIEW',
+        'Protected branch requires a pull request before merge.'
+      );
+    } else {
+      add(
+        'branch-protection',
+        'Branch protection',
+        'PASS',
+        'Protected branch detected; direct-push restrictions will still be enforced by GitHub.'
+      );
+    }
+  } else if (branchProtection?.available) {
+    add(
+      'branch-protection',
+      'Branch protection',
+      'PASS',
+      'No branch protection rule is reported for the current branch.'
+    );
   }
 
   const qualityFresh =
@@ -345,6 +415,7 @@ module.exports = {
   parseWorkflowScripts,
   parseWorkflowJobs,
   normalizeCiStatus,
+  normalizeBranchProtection,
   summarizeCiRuns,
   mapCiScripts,
   getGitPushState,
