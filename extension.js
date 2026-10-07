@@ -44,6 +44,13 @@ const {
   getArchitectureFile,
   toArchitectureView
 } = require('./src/features/architecture');
+const {
+  discoverWorkspaceTasks,
+  runWorkspaceTask,
+  runTaskPlan,
+  standardVerifyTasks,
+  shipTasks
+} = require('./src/features/orchestrator');
 
 let lastEditorContext = {
   fileName: '',
@@ -138,6 +145,19 @@ let architectureSearchState = {
   model: '',
   error: '',
   running: false
+};
+
+let taskOrchestratorState = {
+  running: false,
+  name: '',
+  mode: '',
+  requested: [],
+  results: [],
+  passed: null,
+  message: '',
+  startedAt: 0,
+  finishedAt: 0,
+  durationMs: 0
 };
 
 let cpAiState = {
@@ -4860,6 +4880,338 @@ async function exportDeveloperAnalytics(context, extensionUri) {
 }
 
 
+
+function taskWorkflowStorageKey() {
+  return getWorkspaceRoot() || '__no_workspace__';
+}
+
+function getSavedTaskWorkflows(context) {
+  if (!context) return [];
+  const all = context.globalState.get('galaxy.taskWorkflows', {}) || {};
+  const list = all[taskWorkflowStorageKey()];
+  return Array.isArray(list) ? list : [];
+}
+
+function getTaskRunHistory(context) {
+  if (!context) return [];
+  const all = context.globalState.get('galaxy.taskRunHistory', {}) || {};
+  const list = all[taskWorkflowStorageKey()];
+  return Array.isArray(list) ? list : [];
+}
+
+async function recordTaskRunHistory(context, run) {
+  if (!context || !run) return;
+  const all = context.globalState.get('galaxy.taskRunHistory', {}) || {};
+  const key = taskWorkflowStorageKey();
+  const current = Array.isArray(all[key]) ? all[key] : [];
+
+  const entry = {
+    at: Date.now(),
+    name: String(run.name || 'Task Run'),
+    mode: String(run.mode || 'sequential'),
+    passed: Boolean(run.passed),
+    durationMs: Number(run.durationMs || 0),
+    tasks: Array.isArray(run.results)
+      ? run.results.map((item) => ({
+          name: String(item.name || ''),
+          kind: String(item.kind || ''),
+          passed: Boolean(item.passed),
+          exitCode: Number(item.exitCode ?? -1),
+          durationMs: Number(item.durationMs || 0)
+        }))
+      : []
+  };
+
+  all[key] = [entry, ...current].slice(0, 20);
+  await context.globalState.update('galaxy.taskRunHistory', all);
+}
+
+function getTaskOrchestratorState(context) {
+  const root = getWorkspaceRoot();
+  const discovery = root
+    ? discoverWorkspaceTasks(root)
+    : {
+        packageManager: '',
+        packageName: '',
+        tasks: [],
+        edges: [],
+        standard: {}
+      };
+
+  return {
+    ...taskOrchestratorState,
+    discovery,
+    workflows: getSavedTaskWorkflows(context),
+    history: getTaskRunHistory(context)
+  };
+}
+
+async function executeTaskPlan(context, extensionUri, name, taskNames, options = {}) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const discovery = discoverWorkspaceTasks(root);
+  const valid = Array.from(
+    new Set((taskNames || []).filter((taskName) =>
+      discovery.tasks.some((item) => item.name === taskName)
+    ))
+  );
+
+  if (!valid.length) {
+    vscode.window.showInformationMessage('No runnable package scripts were selected.');
+    return false;
+  }
+
+  taskOrchestratorState = {
+    running: true,
+    name: String(name || 'Task Run'),
+    mode: options.mode === 'parallel' ? 'parallel' : 'sequential',
+    requested: valid,
+    results: [],
+    passed: null,
+    message: 'Running ' + valid.length + ' task(s)…',
+    startedAt: Date.now(),
+    finishedAt: 0,
+    durationMs: 0
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const run = await runTaskPlan(
+    root,
+    discovery,
+    valid,
+    {
+      mode: taskOrchestratorState.mode,
+      stopOnFailure: options.stopOnFailure !== false,
+      timeoutMs: Number(options.timeoutMs || 180000)
+    }
+  );
+
+  taskOrchestratorState = {
+    running: false,
+    name: String(name || 'Task Run'),
+    mode: run.mode,
+    requested: run.requested,
+    results: run.results,
+    passed: run.passed,
+    message: run.passed
+      ? 'All requested tasks passed.'
+      : 'Workflow stopped or completed with a failure.',
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    durationMs: run.durationMs
+  };
+
+  await recordTaskRunHistory(context, {
+    ...taskOrchestratorState,
+    results: run.results
+  });
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  vscode.window.showInformationMessage(
+    'Galaxy Tasks: ' +
+    (run.passed ? 'PASS' : 'FAILED') +
+    ' · ' +
+    Math.round(run.durationMs / 1000) +
+    's'
+  );
+
+  return run.passed;
+}
+
+async function runSingleWorkspaceTask(context, extensionUri, taskName) {
+  return executeTaskPlan(
+    context,
+    extensionUri,
+    taskName,
+    [taskName],
+    { mode: 'sequential', stopOnFailure: true }
+  );
+}
+
+async function runVerifyPipeline(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) return false;
+  const discovery = discoverWorkspaceTasks(root);
+  const tasks = standardVerifyTasks(discovery);
+
+  if (!tasks.length) {
+    vscode.window.showInformationMessage(
+      'No standard lint/typecheck/test/build scripts were detected.'
+    );
+    return false;
+  }
+
+  return executeTaskPlan(
+    context,
+    extensionUri,
+    'Verify Pipeline',
+    tasks,
+    { mode: 'sequential', stopOnFailure: true }
+  );
+}
+
+async function runShipPipeline(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const discovery = discoverWorkspaceTasks(root);
+  const tasks = shipTasks(discovery);
+
+  if (tasks.length) {
+    const passed = await executeTaskPlan(
+      context,
+      extensionUri,
+      'Ship · Build + Test',
+      tasks,
+      { mode: 'sequential', stopOnFailure: true }
+    );
+    if (!passed) {
+      vscode.window.showWarningMessage(
+        'Galaxy Ship stopped because Build/Test did not pass.'
+      );
+      return false;
+    }
+  }
+
+  const gatePassed = await runQualityGate(context, extensionUri);
+  if (!gatePassed || qualityGateState.status !== 'READY') {
+    vscode.window.showWarningMessage(
+      'Galaxy Ship stopped because Quality Gate is not READY.'
+    );
+    return false;
+  }
+
+  return smartCommitGate(context, extensionUri);
+}
+
+async function createSavedTaskWorkflow(context) {
+  const root = getWorkspaceRoot();
+  if (!context || !root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const discovery = discoverWorkspaceTasks(root);
+  if (!discovery.tasks.length) {
+    vscode.window.showInformationMessage('No package.json scripts were found.');
+    return false;
+  }
+
+  const selected = await vscode.window.showQuickPick(
+    discovery.tasks.map((task) => ({
+      label: task.name,
+      description: task.kind + ' · ' + task.command,
+      picked: false,
+      taskName: task.name
+    })),
+    {
+      canPickMany: true,
+      title: 'Create Galaxy Workflow',
+      placeHolder: 'Select scripts in the order you want to configure'
+    }
+  );
+  if (!selected?.length) return false;
+
+  const mode = await vscode.window.showQuickPick(
+    [
+      {
+        label: 'Sequential',
+        description: 'Run in order and stop on the first failure',
+        value: 'sequential'
+      },
+      {
+        label: 'Parallel',
+        description: 'Run all selected tasks at the same time',
+        value: 'parallel'
+      }
+    ],
+    {
+      title: 'Workflow Execution Mode'
+    }
+  );
+  if (!mode) return false;
+
+  const name = await vscode.window.showInputBox({
+    title: 'Workflow Name',
+    prompt: 'Give this workflow a short name',
+    placeHolder: 'Pre-commit Verify',
+    validateInput: (value) =>
+      String(value || '').trim().length >= 2
+        ? undefined
+        : 'Enter at least 2 characters.'
+  });
+  if (!name?.trim()) return false;
+
+  const all = context.globalState.get('galaxy.taskWorkflows', {}) || {};
+  const key = taskWorkflowStorageKey();
+  const current = Array.isArray(all[key]) ? all[key] : [];
+
+  const workflow = {
+    id: String(Date.now()),
+    name: name.trim(),
+    mode: mode.value,
+    tasks: selected.map((item) => item.taskName).slice(0, 20),
+    createdAt: Date.now()
+  };
+
+  all[key] = [
+    workflow,
+    ...current.filter((item) => item.name !== workflow.name)
+  ].slice(0, 12);
+
+  await context.globalState.update('galaxy.taskWorkflows', all);
+  return true;
+}
+
+async function runSavedTaskWorkflow(context, extensionUri, workflowId) {
+  const workflow = getSavedTaskWorkflows(context)
+    .find((item) => item.id === workflowId);
+  if (!workflow) {
+    vscode.window.showInformationMessage('Saved workflow was not found.');
+    return false;
+  }
+
+  return executeTaskPlan(
+    context,
+    extensionUri,
+    workflow.name,
+    workflow.tasks,
+    {
+      mode: workflow.mode,
+      stopOnFailure: workflow.mode !== 'parallel'
+    }
+  );
+}
+
+async function deleteSavedTaskWorkflow(context, workflowId) {
+  if (!context) return false;
+  const workflows = getSavedTaskWorkflows(context);
+  const workflow = workflows.find((item) => item.id === workflowId);
+  if (!workflow) return false;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Delete workflow "' + workflow.name + '"?',
+    { modal: true },
+    'Delete'
+  );
+  if (confirm !== 'Delete') return false;
+
+  const all = context.globalState.get('galaxy.taskWorkflows', {}) || {};
+  all[taskWorkflowStorageKey()] = workflows.filter(
+    (item) => item.id !== workflowId
+  );
+  await context.globalState.update('galaxy.taskWorkflows', all);
+  return true;
+}
+
 function getArchitectureScan(force = false) {
   const root = getWorkspaceRoot();
   if (!root) {
@@ -5167,6 +5519,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     qualityGate: getQualityGateState(context, extensionUri),
     developerAnalytics,
     architecture,
+    taskOrchestrator: context ? getTaskOrchestratorState(context) : null,
     cpArena,
     cpAi: getCpAiState(),
     recentFiles,
