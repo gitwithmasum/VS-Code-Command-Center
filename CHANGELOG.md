@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.2.1
+
+- Removed raw diagnostic-message persistence from recurring-error history and added migration for existing records.
+- Added workspace-isolated Quality Gate state reset.
+- Added dirty-workspace-file protection before Quality Gate verification.
+- Added staged-diff fingerprint validation for Smart Commit freshness.
+- Fixed relative coverage-path handling.
+- Changed failed task AI analysis to explicit opt-in.
+- Clarified VS Code end-exclusive AI edit ranges and improved diff-preview syntax detection.
+- Added Task Orchestrator cancellation support.
+- Prevented startup diagnostics from being counted as new recurring errors.
+- Scoped AI rollback backups to the workspace where the apply occurred.
+- Added .vscodeignore to clean VSIX packaging and remove the packaging warning.
+
+
 ## 3.2.0
 
 - Added Workspace Task Orchestrator + Command Graph.
