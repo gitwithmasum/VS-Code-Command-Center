@@ -215,6 +215,21 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Export Workspace Architecture as JSON
 - Generated/vendor directories are ignored, scanning is capped, and results are cached for 90 seconds to reduce extension-host overhead
 
+## Workspace Task Orchestrator — v3.2
+
+- Auto-discovers all `package.json` scripts in the active workspace
+- Classifies common build, test, lint, typecheck, dev, format, clean, and release tasks
+- Command Graph detects script-to-script references and npm pre-script dependencies
+- Run any discovered task directly from the dashboard
+- Verify Pipeline runs available lint → typecheck → test → build steps sequentially and stops on failure
+- Ship Pipeline runs Build → Test → Quality Gate → Smart Commit
+- Saved workflows support sequential or parallel execution
+- Sequential saved workflows stop on the first failure
+- Workflow run history stores metadata only; captured command output remains in-memory
+- Added shared Windows-safe process execution for npm.cmd / pnpm.cmd / yarn.cmd
+- Windows command execution uses the system command processor only for .cmd/.bat executables while keeping shell=false for arbitrary commands
+- Task results capture exit code, timeout state, duration, and bounded stdout/stderr
+
 ## Planned modules
 
 - Project Launcher
