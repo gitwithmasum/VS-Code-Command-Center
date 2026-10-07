@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0
+
+- Added Developer Analytics + Project Intelligence dashboard.
+- Added 7-day / 30-day active coding-time analytics and coding streaks.
+- Added 30-day language-time distribution.
+- Added local Git commit analytics for the current workspace.
+- Added persistent Quality Gate history with average score and READY-rate analytics.
+- Added daily Project Health history and trend comparison.
+- Added CP performance analytics, preserved CP history across new contests, and tracked explicit official AC results.
+- Added JSON export for developer analytics.
+- Fixed active coding language tracking in the coding-history heartbeat.
+- Added `src/features/analytics.js` to the prepublish syntax gate.
+
+
 ## 2.9.1
 
 - Added CP Multi Test Case Runner with `---` case separators.
