@@ -1,8 +1,8 @@
 {
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
-  "description": "A futuristic VS Code developer command center with architecture intelligence, coding analytics, AI debugging, quality gates, Git workflows, focus tracking, and competitive-programming tools.",
-  "version": "3.1.0",
+  "description": "A futuristic VS Code developer command center with task orchestration, architecture intelligence, coding analytics, AI debugging, quality gates, Git workflows, and competitive-programming tools.",
+  "version": "3.2.0",
   "publisher": "gitwithmasum",
   "author": {
     "name": "Masum Billah",
@@ -33,7 +33,11 @@
     "architecture intelligence",
     "dependency graph",
     "workspace search",
-    "code navigation"
+    "code navigation",
+    "task orchestrator",
+    "workflow automation",
+    "command graph",
+    "npm scripts"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -83,10 +87,10 @@
     }
   },
   "scripts": {
-    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/features/cp.js && node --check src/features/analytics.js && node --check src/features/architecture.js",
+    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/core/process.js && node --check src/features/cp.js && node --check src/features/analytics.js && node --check src/features/architecture.js && node --check src/features/orchestrator.js",
     "vscode:prepublish": "npm run check",
     "package": "vsce package",
-    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-3.1.0.vsix --force"
+    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-3.2.0.vsix --force"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
