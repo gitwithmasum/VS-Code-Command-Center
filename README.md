@@ -333,6 +333,20 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - Repository hygiene checks for .gitignore, README, and license files
 - Dependency audit stays explicit; Project Doctor does not silently use the network
 
+## Release Center — v3.7
+
+- Deterministic **READY / REVIEW / BLOCKED / TAGGED** release verdict
+- Validates semantic versioning and package.json ↔ package-lock.json version alignment
+- Requires a current-version CHANGELOG.md section and previews its release notes
+- Gates release readiness on clean Git state, upstream sync, Quality Gate freshness, CI status, and Project Doctor
+- Detects version-tag collisions and whether the current version tag points to HEAD
+- **Run Release Check** refreshes local verification, Quality Gate, Project Doctor, and CI
+- **Create Version Tag** requires modal confirmation; pushing the tag requires a second confirmation
+- **Draft GitHub Release** requires the version tag on current HEAD and another modal confirmation
+- Draft release body comes from CHANGELOG.md and targets the verified current commit
+- Includes Copy Notes, Open Releases, and next patch/minor/major suggestions
+- Never bumps package versions automatically
+
 ## Planned modules
 
 - Project Launcher
