@@ -288,6 +288,24 @@ GitHub account-level integration uses the user's existing VS Code authentication
 - **REVIEW** — something is incomplete but not proven broken, such as no upstream, uncommitted files, missing CI result, or stale local verification.
 - **BLOCKED** — merge conflicts, branch behind upstream, failed local workflow, BLOCKED Quality Gate, or failed GitHub Actions.
 
+## Galaxy AI Agent Mode — v3.4
+
+- New memory-only Galaxy AI Agent dashboard
+- Enter a natural-language developer goal such as `prepare this project for release`
+- AI creates a plan only; it does not directly execute arbitrary model-generated commands
+- Every plan is normalized against a fixed action whitelist
+- Unknown or invented actions are discarded
+- Local deterministic fallback planning works when no VS Code language model is available or an AI plan cannot be parsed safely
+- Supported actions include workspace inspection, Verify Pipeline, Quality Gate, CI refresh, staged-change review, diagnostic analysis, AI fix proposal, Smart Commit Gate, and Push If Ready
+- Agent execution is step-by-step through `Run Next Step`
+- Verification/AI steps require explicit approval before execution
+- Commit and push steps are classified as write actions and require agent approval plus their existing downstream confirmation gates
+- Agent never gets a free-form shell execution capability
+- AI Fix actions create reviewable proposals only; they do not silently apply source changes
+- Agent plans, goals, step results, and model state are kept in memory only and are not persisted to a database or coding history
+- New `src/features/agent.js` pure core validates plans, action risk, progression, fallback planning, and completion state
+- Added automated Agent tests to the existing `npm test` and prepublish gates
+
 ## Planned modules
 
 - Project Launcher
