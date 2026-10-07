@@ -3226,6 +3226,12 @@ async function scanDependencies(extensionUri) {
         : 'Dependency scan found no reported vulnerabilities.'
   };
 
+  projectDoctorCache = {
+    root: '',
+    at: 0,
+    report: null
+  };
+
   if (dashboardRenderCallback) await dashboardRenderCallback();
   return true;
 }
