@@ -22,6 +22,7 @@ function runCapturedProcess(command, args = [], cwd, timeoutMs = 120000, options
     let settled = false;
     let child = null;
     let timer = null;
+    let abortHandler = null;
 
     const append = (target, chunk) => {
       const next = target + String(chunk || '');
@@ -32,15 +33,25 @@ function runCapturedProcess(command, args = [], cwd, timeoutMs = 120000, options
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (abortHandler && options.signal) {
+        options.signal.removeEventListener('abort', abortHandler);
+      }
       resolve({
         exitCode: Number.isInteger(result.exitCode) ? result.exitCode : -1,
         stdout,
         stderr,
         timedOut: Boolean(result.timedOut),
+        cancelled: Boolean(result.cancelled),
         command: executable,
         args: safeArgs
       });
     };
+
+    if (options.signal?.aborted) {
+      stderr = append(stderr, '[Galaxy] Task cancelled before start.');
+      finish({ exitCode: -1, timedOut: false, cancelled: true });
+      return;
+    }
 
     try {
       const isWindowsCmd =
@@ -90,16 +101,28 @@ function runCapturedProcess(command, args = [], cwd, timeoutMs = 120000, options
     child.on('close', (code) => {
       finish({
         exitCode: Number.isInteger(code) ? code : -1,
-        timedOut: false
+        timedOut: false,
+        cancelled: false
       });
     });
+
+    if (options.signal) {
+      abortHandler = () => {
+        try {
+          child.kill();
+        } catch {}
+        stderr = append(stderr, '\n[Galaxy] Task cancelled by user.');
+        finish({ exitCode: -1, timedOut: false, cancelled: true });
+      };
+      options.signal.addEventListener('abort', abortHandler, { once: true });
+    }
 
     timer = setTimeout(() => {
       try {
         child.kill();
       } catch {}
       stderr = append(stderr, '\n[Galaxy] Task timed out and was stopped.');
-      finish({ exitCode: -1, timedOut: true });
+      finish({ exitCode: -1, timedOut: true, cancelled: false });
     }, Math.max(1000, Number(timeoutMs || 120000)));
   });
 }
