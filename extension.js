@@ -2178,6 +2178,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'smartDeveloper', label: 'Smart Developer Assistant' },
   { id: 'aiFix', label: 'AI Fix Studio' },
   { id: 'quality', label: 'Quality Gate + Auto Verify' },
+  { id: 'analytics', label: 'Developer Analytics + Project Intelligence' },
   { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
@@ -4806,6 +4807,95 @@ function getCpAiState() {
   return { ...cpAiState };
 }
 
+
+function analyticsDayLabel(value) {
+  const text = String(value || '');
+  return text.length >= 10 ? text.slice(5) : text;
+}
+
+function renderAnalyticsCodingBars(items) {
+  if (!items?.length) return '<p class="muted">No coding history yet.</p>';
+  return items.map((item) =>
+    '<div class="analytics-bar-row">' +
+      '<span>' + escapeHtml(analyticsDayLabel(item.day)) + '</span>' +
+      '<div class="analytics-track"><i style="width:' + Math.max(0, Math.min(100, Number(item.percent || 0))) + '%"></i></div>' +
+      '<strong>' + escapeHtml(item.text || '0m') + '</strong>' +
+    '</div>'
+  ).join('');
+}
+
+function renderAnalyticsGitBars(items) {
+  if (!items?.length) return '<p class="muted">No Git activity yet.</p>';
+  return items.map((item) =>
+    '<div class="analytics-bar-row">' +
+      '<span>' + escapeHtml(analyticsDayLabel(item.day)) + '</span>' +
+      '<div class="analytics-track"><i style="width:' + Math.max(0, Math.min(100, Number(item.percent || 0))) + '%"></i></div>' +
+      '<strong>' + Number(item.commits || 0) + '</strong>' +
+    '</div>'
+  ).join('');
+}
+
+function renderAnalyticsLanguages(items) {
+  if (!items?.length) return '<p class="muted">No language-time data yet.</p>';
+  return items.map((item) =>
+    '<div class="analytics-language-row">' +
+      '<div><strong>' + escapeHtml(item.name) + '</strong><small>' + escapeHtml(item.text) + '</small></div>' +
+      '<div class="analytics-track"><i style="width:' + Math.max(0, Math.min(100, Number(item.percent || 0))) + '%"></i></div>' +
+      '<span>' + Number(item.percent || 0) + '%</span>' +
+    '</div>'
+  ).join('');
+}
+
+function renderAnalyticsQualityHistory(items) {
+  if (!items?.length) return '<p class="muted">Run Quality Gate to build history.</p>';
+  return items.map((item) =>
+    '<div class="history-row"><div><strong>' + escapeHtml(item.status) +
+    ' · ' + Number(item.score || 0) + '/100</strong><small>' +
+    escapeHtml(new Date(Number(item.at || 0)).toLocaleString()) +
+    '</small></div><span>' + Number(item.checksPassed || 0) + '/' +
+    Number(item.checksTotal || 0) + ' checks</span></div>'
+  ).join('');
+}
+
+function renderAnalyticsHealthHistory(items) {
+  if (!items?.length) return '<p class="muted">Project health history starts today.</p>';
+  return items.map((item) =>
+    '<div class="history-row"><div><strong>' + escapeHtml(item.day) +
+    '</strong><small>' + Number(item.errors || 0) + ' errors · ' +
+    Number(item.warnings || 0) + ' warnings</small></div><span>' +
+    Number(item.score || 0) + '/100</span></div>'
+  ).join('');
+}
+
+async function exportDeveloperAnalytics(context, extensionUri) {
+  if (!context) return false;
+
+  const health = await getProjectHealth(extensionUri);
+  const cpState = getCpArenaState(context);
+  await recordProjectHealthHistory(context, health);
+  const analytics = getDeveloperAnalytics(context, { health, cpState });
+
+  const root = getWorkspaceRoot(extensionUri);
+  const defaultUri = root
+    ? vscode.Uri.file(path.join(root, 'galaxy-developer-analytics-' + localDayKey() + '.json'))
+    : undefined;
+
+  const target = await vscode.window.showSaveDialog({
+    title: 'Export Galaxy Developer Analytics',
+    defaultUri,
+    saveLabel: 'Export Analytics',
+    filters: { 'JSON': ['json'] }
+  });
+  if (!target) return false;
+
+  await vscode.workspace.fs.writeFile(
+    target,
+    Buffer.from(JSON.stringify(analytics, null, 2), 'utf8')
+  );
+  vscode.window.showInformationMessage('Galaxy developer analytics exported.');
+  return true;
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -5043,6 +5133,26 @@ function getDashboardHtml(state) {
   .coverage-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
   .coverage-grid div{padding:9px;border:1px solid rgba(0,247,255,.08);border-radius:9px}
   .coverage-grid span{display:block;color:var(--muted);font-size:9px;margin-bottom:4px}
+  .analytics-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .analytics-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .analytics-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
+  .analytics-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .analytics-stat strong{font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+  .analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .analytics-panel{padding:12px;border:1px solid rgba(139,92,255,.14);border-radius:12px;background:rgba(139,92,255,.022)}
+  .analytics-bar-row{display:grid;grid-template-columns:52px minmax(0,1fr) 68px;gap:9px;align-items:center;margin:8px 0}
+  .analytics-bar-row>span{color:var(--muted);font-size:10px}
+  .analytics-bar-row>strong{text-align:right;font-size:11px}
+  .analytics-track{height:8px;border-radius:999px;background:rgba(0,247,255,.07);overflow:hidden}
+  .analytics-track i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--cyan),var(--purple));box-shadow:0 0 12px rgba(0,247,255,.18)}
+  .analytics-language-row{display:grid;grid-template-columns:110px minmax(0,1fr) 42px;gap:9px;align-items:center;margin:9px 0}
+  .analytics-language-row>div:first-child{display:flex;flex-direction:column;min-width:0}
+  .analytics-language-row strong,.analytics-language-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .analytics-language-row small{color:var(--muted);margin-top:2px}
+  .analytics-language-row>span{text-align:right;color:var(--muted)}
+  .analytics-intel{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:10px}
+  .analytics-intel div{padding:10px;border:1px solid rgba(0,247,255,.09);border-radius:10px}
+  .analytics-intel span{display:block;color:var(--muted);font-size:9px;margin-bottom:5px}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -5181,7 +5291,7 @@ function getDashboardHtml(state) {
   .snapshot-copy{display:flex;flex-direction:column;min-width:0}
   .snapshot-copy strong,.snapshot-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .snapshot-copy small{color:var(--muted);margin-top:4px}
-  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:900px){.telemetry{grid-template-columns:repeat(2,1fr)}.health-grid{grid-template-columns:repeat(2,1fr)}.env-grid{grid-template-columns:repeat(2,1fr)}.git-grid,.git-actions,.repo-tool-grid{grid-template-columns:repeat(2,1fr)}.command-columns{grid-template-columns:1fr}.mode-grid,.theme-grid{grid-template-columns:repeat(2,1fr)}.ai-grid,.ai-actions{grid-template-columns:repeat(2,1fr)}.session-grid,.focus-stats,.smart-dev-grid,.ai-fix-meta,.quality-summary,.cp-summary,.analytics-summary{grid-template-columns:repeat(2,1fr)}.advanced-repo-grid,.focus-history-grid,.quality-grid,.cp-runner,.analytics-grid{grid-template-columns:1fr}.cp-problems{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:820px){.grid,.telemetry{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.card.wide{grid-column:auto}}
 </style>
 </head>
@@ -5432,6 +5542,67 @@ function getDashboardHtml(state) {
       </div>
 
       <p class="muted" style="margin:12px 0 0">READY means no blocking diagnostics/conflicts and all available verification scripts passed. Dependency scan is explicit because npm audit may use the network.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'analytics')}>
+      <div class="analytics-head">
+        <div>
+          <div class="label">DEVELOPER ANALYTICS + PROJECT INTELLIGENCE</div>
+          <h3 style="margin-bottom:4px">Your coding signal, project trend, and practice performance</h3>
+          <div class="muted">Coding analytics span your VS Code activity; Git, Quality, Health, and CP intelligence are scoped to this workspace.</div>
+        </div>
+        <button data-command="exportDeveloperAnalytics"><span>⇩</span>Export JSON</button>
+      </div>
+
+      <div class="analytics-summary">
+        <div class="analytics-stat"><span>CODING · 7 DAYS</span><strong>${escapeHtml(state.developerAnalytics.coding.total7Text)}</strong></div>
+        <div class="analytics-stat"><span>CODING · 30 DAYS</span><strong>${escapeHtml(state.developerAnalytics.coding.total30Text)}</strong></div>
+        <div class="analytics-stat"><span>STREAK</span><strong>${state.developerAnalytics.coding.streak} day${state.developerAnalytics.coding.streak === 1 ? '' : 's'}</strong></div>
+        <div class="analytics-stat"><span>TOP LANGUAGE</span><strong>${escapeHtml(state.developerAnalytics.coding.topLanguage)}</strong></div>
+        <div class="analytics-stat"><span>GIT · 30 DAYS</span><strong>${state.developerAnalytics.git.commits30} commits</strong></div>
+        <div class="analytics-stat"><span>QUALITY READY</span><strong>${state.developerAnalytics.quality.readyRate}%</strong></div>
+      </div>
+
+      <div class="analytics-grid">
+        <div class="analytics-panel">
+          <div class="project-group-title">CODING ACTIVITY · LAST 7 DAYS</div>
+          ${renderAnalyticsCodingBars(state.developerAnalytics.coding.daily7)}
+          <div class="commit-line">${state.developerAnalytics.coding.activeDays30} active day(s) in the last 30 days.</div>
+        </div>
+
+        <div class="analytics-panel">
+          <div class="project-group-title">LANGUAGE DISTRIBUTION · 30 DAYS</div>
+          ${renderAnalyticsLanguages(state.developerAnalytics.coding.languages)}
+        </div>
+
+        <div class="analytics-panel">
+          <div class="project-group-title">GIT ACTIVITY · LAST 7 DAYS</div>
+          ${renderAnalyticsGitBars(state.developerAnalytics.git.daily7)}
+          <div class="commit-line">${state.developerAnalytics.git.commits7} commits this week · ${state.developerAnalytics.git.activeDays30} Git-active day(s) in 30 days.</div>
+        </div>
+
+        <div class="analytics-panel">
+          <div class="project-group-title">PROJECT INTELLIGENCE</div>
+          <div class="analytics-intel">
+            <div><span>HEALTH</span><strong>${state.developerAnalytics.health.currentScore}/100</strong><small class="muted">${state.developerAnalytics.health.delta > 0 ? '+' : ''}${state.developerAnalytics.health.delta} vs previous</small></div>
+            <div><span>QUALITY AVG</span><strong>${state.developerAnalytics.quality.averageScore}/100</strong><small class="muted">${state.developerAnalytics.quality.runs} tracked run(s)</small></div>
+            <div><span>LATEST GATE</span><strong>${escapeHtml(state.developerAnalytics.quality.latestStatus)}</strong><small class="muted">${state.developerAnalytics.quality.latestScore}/100</small></div>
+            <div><span>CP PASS RATE</span><strong>${state.developerAnalytics.cp.passRate}%</strong><small class="muted">${state.developerAnalytics.cp.runs} judged run(s)</small></div>
+            <div><span>OFFICIAL AC</span><strong>${state.developerAnalytics.cp.accepted}</strong><small class="muted">preserved across contests</small></div>
+            <div><span>CP AVG RUNTIME</span><strong>${state.developerAnalytics.cp.averageRuntimeMs} ms</strong><small class="muted">${state.developerAnalytics.cp.stressRuns} stress run(s)</small></div>
+          </div>
+        </div>
+
+        <div class="analytics-panel">
+          <div class="project-group-title">QUALITY GATE HISTORY</div>
+          ${renderAnalyticsQualityHistory(state.developerAnalytics.quality.recent)}
+        </div>
+
+        <div class="analytics-panel">
+          <div class="project-group-title">PROJECT HEALTH TREND</div>
+          ${renderAnalyticsHealthHistory(state.developerAnalytics.health.recent)}
+        </div>
+      </div>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'cpArena')}>
@@ -6382,6 +6553,8 @@ async function runAction(command, value, context) {
       return revertLastAiApply();
     case 'smartCommitGate':
       return smartCommitGate(context, context?.extensionUri);
+    case 'exportDeveloperAnalytics':
+      return exportDeveloperAnalytics(context, context?.extensionUri);
     case 'cpStartContest':
       return startCpContestPrompt(context);
     case 'cpStopContest':
