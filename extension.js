@@ -30,6 +30,11 @@ const {
   getCpTemplate,
   getCpSnippets
 } = require('./src/features/cp');
+const {
+  getDeveloperAnalytics,
+  recordQualityGateHistory,
+  recordProjectHealthHistory
+} = require('./src/features/analytics');
 
 let lastEditorContext = {
   fileName: '',
@@ -1665,7 +1670,7 @@ async function recordCodingActivity(context, elapsedMs) {
   const root = getWorkspaceRoot();
   if (!root) return;
 
-  const language = document.languageId || 'unknown';
+  const language = editor.document.languageId || 'unknown';
   const filePath = editor.document.uri.fsPath;
   const relative = path.relative(root, filePath) || path.basename(filePath);
   const project = path.basename(root);
@@ -2998,6 +3003,8 @@ async function runQualityGate(context, extensionUri, options = {}) {
           ? 'Checks passed with warnings or review items.'
           : 'One or more blocking quality checks failed.'
   };
+
+  await recordQualityGateHistory(context, qualityGateState);
 
   if (dashboardRenderCallback) await dashboardRenderCallback();
 
@@ -4810,6 +4817,15 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
   ]);
   const githubCollaboration = await getGitHubCollaborationState(git);
   const environment = getEnvironmentStatus();
+  const cpArena = context ? getCpArenaState(context) : null;
+
+  if (context) {
+    await recordProjectHealthHistory(context, health);
+  }
+
+  const developerAnalytics = context
+    ? getDeveloperAnalytics(context, { health, cpState: cpArena })
+    : null;
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -4831,7 +4847,8 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     smartAssistant: getSmartAssistantState(extensionUri),
     aiEdit: getAiEditState(),
     qualityGate: getQualityGateState(context, extensionUri),
-    cpArena: context ? getCpArenaState(context) : null,
+    developerAnalytics,
+    cpArena,
     cpAi: getCpAiState(),
     recentFiles,
     ai: getAiHudState(),
