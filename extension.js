@@ -68,6 +68,14 @@ const {
   getGitPushState,
   evaluatePushReadiness
 } = require('./src/features/ci');
+const {
+  getAgentActions,
+  normalizeAgentPlan,
+  fallbackAgentPlan,
+  advanceAgentPlan,
+  getNextAgentStep,
+  isAgentPlanComplete
+} = require('./src/features/agent');
 
 let lastEditorContext = {
   fileName: '',
@@ -181,6 +189,16 @@ let githubStateCache = {
 
 let githubCollaborationCache = { key: '', at: 0, value: null };
 let ciIntelligenceCache = { key: '', at: 0, value: null };
+
+let galaxyAgentState = {
+  running: false,
+  goal: '',
+  summary: '',
+  plan: null,
+  model: '',
+  error: '',
+  lastActionAt: 0
+};
 
 function captureEditorContext(editor, clearEmptySelection = true) {
   if (!editor) return;
@@ -2233,6 +2251,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
   { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
   { id: 'ci', label: 'CI Intelligence + Ready to Push' },
+  { id: 'agent', label: 'Galaxy AI Agent Mode' },
   { id: 'cpArena', label: 'Galaxy CP Arena' },
   { id: 'git', label: 'Repository Control Hub' },
   { id: 'commands', label: 'Command History + Pinned Commands' },
@@ -4865,6 +4884,24 @@ function getCpAiState() {
 
 
 
+
+function renderGalaxyAgentSteps(plan) {
+  const steps = plan?.steps || [];
+  if (!steps.length) {
+    return '<p class="muted">Create a goal to generate a safe step-by-step plan.</p>';
+  }
+
+  return steps.map((step, index) =>
+    '<div class="agent-step ' + escapeHtml(String(step.status || 'PENDING').toLowerCase()) + '">' +
+      '<span class="agent-index">' + String(index + 1).padStart(2, '0') + '</span>' +
+      '<div><strong>' + escapeHtml(step.label) + '</strong><small>' +
+      escapeHtml(step.reason || step.description || '') +
+      (step.result ? ' · ' + escapeHtml(step.result) : '') +
+      '</small></div><span class="agent-status">' +
+      escapeHtml(step.status || 'PENDING') + '</span></div>'
+  ).join('');
+}
+
 function renderCiWorkflows(items) {
   if (!items?.length) {
     return '<p class="muted">No local .github/workflows YAML files detected.</p>';
@@ -6025,6 +6062,308 @@ async function pushIfReady(context, extensionUri) {
   return pushed;
 }
 
+
+function getGalaxyAgentState() {
+  const plan = galaxyAgentState.plan || {
+    goal: galaxyAgentState.goal || '',
+    summary: galaxyAgentState.summary || '',
+    steps: []
+  };
+
+  return {
+    ...galaxyAgentState,
+    plan,
+    nextStep: getNextAgentStep(plan),
+    complete: isAgentPlanComplete(plan),
+    actions: getAgentActions()
+  };
+}
+
+async function createGalaxyAgentPlan(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const goal = await vscode.window.showInputBox({
+    title: 'Galaxy AI Agent · New Goal',
+    prompt: 'Describe what you want the agent to accomplish',
+    placeHolder: 'Prepare this project for release',
+    validateInput: (value) =>
+      String(value || '').trim().length >= 4
+        ? undefined
+        : 'Enter a goal with at least 4 characters.'
+  });
+  if (!goal?.trim()) return false;
+
+  galaxyAgentState = {
+    running: true,
+    goal: goal.trim(),
+    summary: '',
+    plan: null,
+    model: '',
+    error: '',
+    lastActionAt: Date.now()
+  };
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  const git = await getGitState(extensionUri);
+  const quality = getQualityGateState(context, extensionUri);
+  const orchestrator = getTaskOrchestratorState(context);
+  const ci = await getCiIntelligenceState(git, quality, orchestrator, false);
+  const diagnostics = collectDebugDiagnostics();
+  const actionCatalog = getAgentActions();
+
+  const prompt = [
+    'Create a safe execution plan for this VS Code developer goal.',
+    'Return ONLY JSON with this exact shape:',
+    '{"goal":"...","summary":"...","steps":[{"action":"inspectWorkspace","reason":"..."}]}',
+    'Use only action IDs from the allowed action catalog below.',
+    'Do not invent shell commands, files, APIs, or actions.',
+    'Prefer the smallest useful plan, normally 2-7 steps.',
+    'Put inspection/verification before commit or push actions.',
+    '',
+    'Goal: ' + goal.trim(),
+    'Workspace metadata:',
+    '- Project type: ' + (detectProject ? (await detectProject(extensionUri)).type : 'unknown'),
+    '- Branch: ' + (git.branch || 'none'),
+    '- Git changes: ' + Number(git.changes || 0),
+    '- Quality Gate: ' + (quality.status || 'NOT RUN'),
+    '- Ready-to-Push: ' + (ci.readiness?.verdict || 'REVIEW'),
+    '- Diagnostics: ' + diagnostics.filter((item) => item.severity === 'Error').length +
+      ' errors, ' + diagnostics.filter((item) => item.severity === 'Warning').length + ' warnings',
+    '- Detected tasks: ' + (orchestrator.discovery?.tasks || []).map((item) => item.name).slice(0, 20).join(', '),
+    '',
+    'Allowed actions:',
+    ...actionCatalog.map((item) =>
+      '- ' + item.id + ' [' + item.risk + ']: ' + item.description
+    )
+  ].join('\n');
+
+  let plan = null;
+  let model = '';
+  let error = '';
+
+  const ai = await requestGalaxyModel(
+    prompt,
+    'Act as a cautious software-engineering agent planner. Plan only; never claim an action already happened.'
+  );
+
+  if (ai.ok) {
+    try {
+      plan = normalizeAgentPlan(extractJsonObject(ai.text), goal.trim());
+      model = ai.model;
+      if (!plan.steps.length) {
+        plan = fallbackAgentPlan(goal.trim());
+        error = 'AI returned no usable allowed steps, so a local fallback plan was used.';
+      }
+    } catch (parseError) {
+      plan = fallbackAgentPlan(goal.trim());
+      error = 'AI plan could not be parsed safely, so a local fallback plan was used.';
+    }
+  } else {
+    plan = fallbackAgentPlan(goal.trim());
+    model = ai.model || 'Local fallback';
+    error = ai.error || 'No language model was available; local fallback plan used.';
+  }
+
+  galaxyAgentState = {
+    running: false,
+    goal: plan.goal || goal.trim(),
+    summary: plan.summary || '',
+    plan,
+    model,
+    error,
+    lastActionAt: Date.now()
+  };
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return true;
+}
+
+async function confirmGalaxyAgentStep(step) {
+  if (!step || step.risk === 'safe') return true;
+
+  const actionLabel =
+    step.risk === 'write'
+      ? 'Approve Write Step'
+      : 'Approve Step';
+
+  const detail =
+    step.risk === 'write'
+      ? 'This step can create a Git commit or push to a remote. The underlying command will still use its own confirmation safeguards.'
+      : 'This step may execute project checks or send explicitly scoped context to your configured VS Code language model.';
+
+  const confirm = await vscode.window.showWarningMessage(
+    step.label + '\n\n' + detail,
+    { modal: true },
+    actionLabel
+  );
+  return confirm === actionLabel;
+}
+
+async function executeGalaxyAgentAction(step, context, extensionUri) {
+  switch (step.action) {
+    case 'inspectWorkspace': {
+      const scan = getArchitectureScan(true);
+      return {
+        ok: Boolean(scan),
+        result: scan
+          ? 'Scanned ' + Number(scan.totalFiles || 0) + ' workspace file(s).'
+          : 'Workspace scan unavailable.'
+      };
+    }
+
+    case 'verifyProject': {
+      const ok = await runVerifyPipeline(context, extensionUri);
+      return { ok, result: ok ? 'Verify Pipeline passed.' : 'Verify Pipeline did not pass.' };
+    }
+
+    case 'runQualityGate': {
+      const ok = await runQualityGate(context, extensionUri);
+      return {
+        ok,
+        result: ok
+          ? 'Quality Gate is READY.'
+          : 'Quality Gate is not READY.'
+      };
+    }
+
+    case 'refreshCi': {
+      await refreshCiIntelligence();
+      const git = await getGitState(extensionUri);
+      const quality = getQualityGateState(context, extensionUri);
+      const orchestrator = getTaskOrchestratorState(context);
+      const ci = await getCiIntelligenceState(git, quality, orchestrator, true);
+      return {
+        ok: true,
+        result: 'CI refreshed · readiness ' + (ci.readiness?.verdict || 'REVIEW') + '.'
+      };
+    }
+
+    case 'reviewStaged': {
+      const ok = await reviewStagedChangesWithAi(extensionUri);
+      return { ok, result: ok ? 'Staged-change AI review completed.' : 'Staged review was not completed.' };
+    }
+
+    case 'analyzeDiagnostics': {
+      const ok = await analyzeLatestDiagnostic(context);
+      return { ok, result: ok ? 'Diagnostic analysis completed.' : 'Diagnostic analysis was not completed.' };
+    }
+
+    case 'proposeFix': {
+      const ok = await generateDiagnosticFixProposal();
+      return {
+        ok,
+        result: ok
+          ? 'AI fix proposal generated. Review the diff before any Apply action.'
+          : 'No fix proposal was generated.'
+      };
+    }
+
+    case 'smartCommit': {
+      const ok = await smartCommitGate(context, extensionUri);
+      return { ok, result: ok ? 'Smart Commit completed.' : 'Smart Commit was not completed.' };
+    }
+
+    case 'pushIfReady': {
+      const ok = await pushIfReady(context, extensionUri);
+      return { ok, result: ok ? 'Verified push completed.' : 'Push was not completed.' };
+    }
+
+    default:
+      return { ok: false, result: 'Unsupported agent action.' };
+  }
+}
+
+async function runGalaxyAgentNext(context, extensionUri) {
+  if (galaxyAgentState.running) {
+    vscode.window.showInformationMessage('Galaxy AI Agent is already running a step.');
+    return false;
+  }
+
+  const step = getNextAgentStep(galaxyAgentState.plan);
+  if (!step) {
+    vscode.window.showInformationMessage('Galaxy AI Agent has no pending steps.');
+    return false;
+  }
+
+  const approved = await confirmGalaxyAgentStep(step);
+  if (!approved) return false;
+
+  galaxyAgentState.running = true;
+  galaxyAgentState.plan = advanceAgentPlan(
+    galaxyAgentState.plan,
+    step.action,
+    'RUNNING',
+    ''
+  );
+  galaxyAgentState.lastActionAt = Date.now();
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+
+  let outcome;
+  try {
+    outcome = await executeGalaxyAgentAction(step, context, extensionUri);
+  } catch (error) {
+    outcome = {
+      ok: false,
+      result: error?.message || 'Agent step failed.'
+    };
+  }
+
+  galaxyAgentState.plan = advanceAgentPlan(
+    galaxyAgentState.plan,
+    step.action,
+    outcome.ok ? 'PASS' : 'FAILED',
+    outcome.result
+  );
+  galaxyAgentState.running = false;
+  galaxyAgentState.lastActionAt = Date.now();
+
+  if (dashboardRenderCallback) await dashboardRenderCallback();
+  return outcome.ok;
+}
+
+async function skipGalaxyAgentNext() {
+  const step = getNextAgentStep(galaxyAgentState.plan);
+  if (!step) return false;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Skip agent step "' + step.label + '"?',
+    { modal: true },
+    'Skip Step'
+  );
+  if (confirm !== 'Skip Step') return false;
+
+  galaxyAgentState.plan = advanceAgentPlan(
+    galaxyAgentState.plan,
+    step.action,
+    'SKIPPED',
+    'Skipped by user.'
+  );
+  galaxyAgentState.lastActionAt = Date.now();
+  return true;
+}
+
+async function resetGalaxyAgent() {
+  if (galaxyAgentState.running) {
+    vscode.window.showWarningMessage('Wait for the current agent step to finish before resetting.');
+    return false;
+  }
+
+  galaxyAgentState = {
+    running: false,
+    goal: '',
+    summary: '',
+    plan: null,
+    model: '',
+    error: '',
+    lastActionAt: Date.now()
+  };
+  return true;
+}
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -6079,6 +6418,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     architecture,
     taskOrchestrator,
     ciIntelligence,
+    agent: getGalaxyAgentState(),
     cpArena,
     cpAi: getCpAiState(),
     recentFiles,
@@ -6348,6 +6688,20 @@ function getDashboardHtml(state) {
   .ready-check>div{display:flex;flex-direction:column;min-width:0}.ready-check small{color:var(--muted);margin-top:3px}
   .ci-map-line{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;padding:8px 0;border-bottom:1px solid rgba(0,247,255,.07)}
   .ci-map-line span{color:var(--muted)}
+  .agent-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .agent-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .agent-goal{padding:14px;border:1px solid rgba(255,79,216,.18);border-radius:12px;background:rgba(255,79,216,.025);margin-bottom:12px}
+  .agent-goal span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
+  .agent-goal strong{font-size:15px;line-height:1.45}
+  .agent-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:10px}
+  .agent-plan{display:flex;flex-direction:column}
+  .agent-step{display:grid;grid-template-columns:34px minmax(0,1fr) 72px;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid rgba(0,247,255,.07)}
+  .agent-step>div{display:flex;flex-direction:column;min-width:0}
+  .agent-step small{color:var(--muted);margin-top:4px;line-height:1.4}
+  .agent-index{font-family:Consolas,'Courier New',monospace;color:var(--cyan)}
+  .agent-status{font-size:9px;font-weight:900;text-align:right;letter-spacing:.06em}
+  .agent-step.pass .agent-status{color:#64ffb4}.agent-step.failed .agent-status{color:#ff6b8a}.agent-step.running .agent-status{color:#ffcc66}.agent-step.skipped .agent-status{color:var(--muted)}
+  .agent-warning{margin-top:12px;padding:10px;border:1px solid rgba(255,204,102,.16);border-radius:10px;color:#ffcc66}
   .cp-arena-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .cp-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -6985,6 +7339,46 @@ function getDashboardHtml(state) {
             : '<p class="muted">No failing job is currently reported.</p>'}
         </div>
       </div>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'agent')}>
+      <div class="agent-head">
+        <div>
+          <div class="label">GALAXY AI AGENT MODE</div>
+          <h3 style="margin-bottom:4px">Plan first · whitelist actions · explicit approvals</h3>
+          <div class="muted">Agent plans are memory-only. It cannot invent shell commands, silently edit files, commit, or push.</div>
+        </div>
+        <div class="agent-actions">
+          <button data-command="agentCreatePlan"><span>✦</span>New Goal</button>
+          <button data-command="agentRunNext" ${state.agent.running || !state.agent.nextStep ? 'disabled' : ''}><span>▶</span>Run Next Step</button>
+          <button data-command="agentSkipNext" ${state.agent.running || !state.agent.nextStep ? 'disabled' : ''}><span>↷</span>Skip Step</button>
+          <button data-command="agentReset"><span>↺</span>Reset</button>
+        </div>
+      </div>
+
+      <div class="agent-goal">
+        <span>CURRENT GOAL</span>
+        <strong>${escapeHtml(state.agent.plan?.goal || 'No agent goal yet.')}</strong>
+        <div class="agent-meta">
+          <span>MODEL: ${escapeHtml(state.agent.model || '—')}</span>
+          <span>STATUS: ${state.agent.running ? 'RUNNING' : (state.agent.complete ? 'COMPLETE' : (state.agent.nextStep ? 'READY FOR NEXT STEP' : 'IDLE'))}</span>
+          <span>STEPS: ${Number(state.agent.plan?.steps?.length || 0)}</span>
+        </div>
+      </div>
+
+      ${state.agent.plan?.summary
+        ? '<div class="commit-line">' + escapeHtml(state.agent.plan.summary) + '</div>'
+        : ''}
+
+      <div class="agent-plan">
+        ${renderGalaxyAgentSteps(state.agent.plan)}
+      </div>
+
+      ${state.agent.error
+        ? '<div class="agent-warning">' + escapeHtml(state.agent.error) + '</div>'
+        : ''}
+
+      <p class="muted" style="margin:12px 0 0">Safe inspection steps can run directly after you click Run Next Step. Verification/AI/write steps require an additional approval; commit/push keep their own existing confirmation gates too.</p>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'cpArena')}>
@@ -7995,6 +8389,14 @@ async function runAction(command, value, context) {
       return runReadyToPushCheck(context, context?.extensionUri);
     case 'ciPushIfReady':
       return pushIfReady(context, context?.extensionUri);
+    case 'agentCreatePlan':
+      return createGalaxyAgentPlan(context, context?.extensionUri);
+    case 'agentRunNext':
+      return runGalaxyAgentNext(context, context?.extensionUri);
+    case 'agentSkipNext':
+      return skipGalaxyAgentNext();
+    case 'agentReset':
+      return resetGalaxyAgent();
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -8317,6 +8719,10 @@ async function openDashboard(context) {
         message.command === 'ciRefresh' ||
         message.command === 'ciRunReadyCheck' ||
         message.command === 'ciPushIfReady' ||
+        message.command === 'agentCreatePlan' ||
+        message.command === 'agentRunNext' ||
+        message.command === 'agentSkipNext' ||
+        message.command === 'agentReset' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
