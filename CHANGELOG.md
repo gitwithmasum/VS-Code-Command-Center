@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.3.0
+
+- Added CI Intelligence + Ready-to-Push Center.
+- Added local GitHub Actions workflow detection and workflow job/script parsing.
+- Added local-to-CI script mapping.
+- Added current-branch GitHub Actions run and job status through VS Code GitHub authentication.
+- Added failing-job visibility.
+- Added Git ahead/behind, upstream, clean-tree, conflict, and push-commit readiness signals.
+- Added deterministic READY / REVIEW / BLOCKED push-readiness evaluation.
+- Added Run Ready Check: local verification → Quality Gate → CI refresh.
+- Added Push If Ready with mandatory final confirmation.
+- Added `src/features/ci.js` and `test/ci.test.js`.
+- Added CI module/test files to the syntax and prepublish gates.
+- Added GitHub Actions workflow for syntax checks, automated tests, and VSIX packaging.
+
+
 ## 3.2.2
 
 - Extracted Quality Gate pure logic to `src/features/quality.js`.
