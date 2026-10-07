@@ -1,8 +1,8 @@
 {
   "name": "masum-galaxy-command-center",
   "displayName": "Masum Galaxy // Command Center",
-  "description": "A futuristic VS Code developer command center with Project Doctor, Developer Knowledge Graph, safe AI Agent Mode, CI intelligence, task orchestration, architecture intelligence, analytics, Git workflows, and competitive-programming tools.",
-  "version": "3.6.0",
+  "description": "A futuristic VS Code developer command center with Release Center, Project Doctor, Developer Knowledge Graph, safe AI Agent Mode, CI intelligence, task orchestration, architecture intelligence, analytics, Git workflows, and competitive-programming tools.",
+  "version": "3.7.0",
   "publisher": "gitwithmasum",
   "author": {
     "name": "Masum Billah",
@@ -53,7 +53,11 @@
     "dependency graph navigation",
     "project doctor",
     "project diagnostics",
-    "developer health check"
+    "developer health check",
+    "release center",
+    "release readiness",
+    "release management",
+    "github release"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -103,10 +107,10 @@
     }
   },
   "scripts": {
-    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/core/process.js && node --check src/features/cp-core.js && node --check src/features/cp.js && node --check src/features/quality.js && node --check src/features/analytics.js && node --check src/features/architecture.js && node --check src/features/orchestrator.js && node --check src/features/ci.js && node --check src/features/agent.js && node --check src/features/knowledge-graph.js && node --check src/features/project-doctor.js && node --check test/quality.test.js && node --check test/orchestrator.test.js && node --check test/architecture.test.js && node --check test/cp-core.test.js && node --check test/ci.test.js && node --check test/agent.test.js && node --check test/knowledge-graph.test.js && node --check test/project-doctor.test.js",
+    "check": "node --check extension.js && node --check src/core/workspace.js && node --check src/core/git.js && node --check src/core/process.js && node --check src/features/cp-core.js && node --check src/features/cp.js && node --check src/features/quality.js && node --check src/features/analytics.js && node --check src/features/architecture.js && node --check src/features/orchestrator.js && node --check src/features/ci.js && node --check src/features/agent.js && node --check src/features/knowledge-graph.js && node --check src/features/project-doctor.js && node --check src/features/release-center.js && node --check test/quality.test.js && node --check test/orchestrator.test.js && node --check test/architecture.test.js && node --check test/cp-core.test.js && node --check test/ci.test.js && node --check test/agent.test.js && node --check test/knowledge-graph.test.js && node --check test/project-doctor.test.js && node --check test/release-center.test.js",
     "vscode:prepublish": "npm run check && npm test",
     "package": "vsce package",
-    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-3.6.0.vsix --force",
+    "installLocal": "vsce package && code --install-extension masum-galaxy-command-center-3.7.0.vsix --force",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
