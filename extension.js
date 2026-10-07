@@ -87,6 +87,11 @@ const {
   collectProjectDoctorSignals,
   evaluateProjectDoctor
 } = require('./src/features/project-doctor');
+const {
+  normalizeVersion,
+  evaluateReleaseReadiness,
+  nextVersion
+} = require('./src/features/release-center');
 
 let lastEditorContext = {
   fileName: '',
@@ -2287,6 +2292,7 @@ const DASHBOARD_WIDGETS = [
   { id: 'architecture', label: 'Workspace Architecture Intelligence' },
   { id: 'knowledgeGraph', label: 'Developer Knowledge Graph' },
   { id: 'projectDoctor', label: 'Project Doctor' },
+  { id: 'releaseCenter', label: 'Release Center' },
   { id: 'orchestrator', label: 'Workspace Task Orchestrator' },
   { id: 'ci', label: 'CI Intelligence + Ready to Push' },
   { id: 'agent', label: 'Galaxy AI Agent Mode' },
@@ -6830,6 +6836,356 @@ function renderProjectDoctorFindings(findings) {
 }
 
 
+function readTextIfExists(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function getReleaseCenterState(context, extensionUri, ciState, doctorReport) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    return evaluateReleaseReadiness({
+      version: '',
+      git: { isGitRepo: false },
+      quality: {},
+      ci: {},
+      doctor: doctorReport || {}
+    });
+  }
+
+  const packageJson = readJsonIfExists(path.join(root, 'package.json')) || {};
+  const packageLock = readJsonIfExists(path.join(root, 'package-lock.json')) || {};
+  const changelog = readTextIfExists(path.join(root, 'CHANGELOG.md'));
+  const git = getGitPushState(root);
+  const quality = getQualityGateState(context, extensionUri);
+  const currentFingerprint = getQualityGateFingerprint(root);
+  const qualityFingerprintCurrent =
+    Boolean(quality?.fingerprint) &&
+    quality.fingerprint === currentFingerprint;
+
+  const tags = runGit(root, ['tag', '--list'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  const parsed = normalizeVersion(packageJson.version || '');
+  const tag = parsed?.tag || '';
+  const tagSha = tag
+    ? runGit(root, ['rev-list', '-n', '1', tag])
+    : '';
+  const headSha = git.headSha || runGit(root, ['rev-parse', 'HEAD']);
+  const tagHeadMatches = Boolean(
+    tag &&
+    tagSha &&
+    headSha &&
+    tagSha === headSha
+  );
+
+  const state = evaluateReleaseReadiness({
+    version: packageJson.version || '',
+    packageLockVersion: packageLock.version || '',
+    changelog,
+    git,
+    quality,
+    qualityFingerprintCurrent,
+    ci: ciState?.remote || {},
+    doctor: doctorReport || {},
+    tags,
+    tagHeadMatches
+  });
+
+  return {
+    ...state,
+    branch: git.branch || '',
+    headSha,
+    tagExists: Boolean(tag && tags.includes(tag)),
+    tagHeadMatches,
+    nextPatch: nextVersion(packageJson.version || '', 'patch'),
+    nextMinor: nextVersion(packageJson.version || '', 'minor'),
+    nextMajor: nextVersion(packageJson.version || '', 'major')
+  };
+}
+
+async function runReleaseCenterCheck(context, extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  if (!root) {
+    vscode.window.showInformationMessage('Open a workspace folder first.');
+    return false;
+  }
+
+  const discovery = discoverWorkspaceTasks(root);
+  const verifyTasks = standardVerifyTasks(discovery);
+
+  if (verifyTasks.length) {
+    const passed = await executeTaskPlan(
+      context,
+      extensionUri,
+      'Release Verify',
+      verifyTasks,
+      { mode: 'sequential', stopOnFailure: true }
+    );
+    if (!passed) {
+      vscode.window.showWarningMessage(
+        'Release Center stopped because local verification failed.'
+      );
+      return false;
+    }
+  }
+
+  const qualityReady = await runQualityGate(context, extensionUri);
+  if (!qualityReady) {
+    vscode.window.showWarningMessage(
+      'Release Center stopped because Quality Gate is not READY.'
+    );
+    return false;
+  }
+
+  projectDoctorCache = { root: '', at: 0, report: null };
+  getProjectDoctorReport(context, extensionUri, true);
+  await refreshCiIntelligence();
+
+  const gitState = await getGitState(extensionUri);
+  const quality = getQualityGateState(context, extensionUri);
+  const orchestrator = getTaskOrchestratorState(context);
+  const ci = await getCiIntelligenceState(
+    gitState,
+    quality,
+    orchestrator,
+    true
+  );
+  const doctor = getProjectDoctorReport(context, extensionUri, false);
+  const release = getReleaseCenterState(
+    context,
+    extensionUri,
+    ci,
+    doctor
+  );
+
+  const message =
+    'Release Center: ' + release.verdict +
+    ' · ' + Number(release.counts?.block || 0) +
+    ' block · ' + Number(release.counts?.review || 0) +
+    ' review.';
+
+  if (release.verdict === 'READY' || release.verdict === 'TAGGED') {
+    vscode.window.showInformationMessage(message);
+    return true;
+  }
+
+  vscode.window.showWarningMessage(message);
+  return false;
+}
+
+async function copyReleaseCenterNotes(context, extensionUri) {
+  const gitState = await getGitState(extensionUri);
+  const quality = getQualityGateState(context, extensionUri);
+  const orchestrator = getTaskOrchestratorState(context);
+  const ci = await getCiIntelligenceState(
+    gitState,
+    quality,
+    orchestrator,
+    false
+  );
+  const doctor = getProjectDoctorReport(context, extensionUri, false);
+  const release = getReleaseCenterState(
+    context,
+    extensionUri,
+    ci,
+    doctor
+  );
+
+  if (!release.notes) {
+    vscode.window.showWarningMessage(
+      'No changelog release notes are available for the current version.'
+    );
+    return false;
+  }
+
+  await vscode.env.clipboard.writeText(release.notes);
+  vscode.window.showInformationMessage('Release notes copied from CHANGELOG.md.');
+  return true;
+}
+
+async function createReleaseCenterTag(context, extensionUri) {
+  const gitState = await getGitState(extensionUri);
+  const quality = getQualityGateState(context, extensionUri);
+  const orchestrator = getTaskOrchestratorState(context);
+  const ci = await getCiIntelligenceState(
+    gitState,
+    quality,
+    orchestrator,
+    false
+  );
+  const doctor = getProjectDoctorReport(context, extensionUri, false);
+  const release = getReleaseCenterState(
+    context,
+    extensionUri,
+    ci,
+    doctor
+  );
+
+  if (release.verdict === 'TAGGED') {
+    vscode.window.showInformationMessage(
+      release.tag + ' already points to current HEAD.'
+    );
+    return true;
+  }
+
+  if (release.verdict !== 'READY') {
+    vscode.window.showWarningMessage(
+      'Release Center must be READY before creating the version tag.'
+    );
+    return false;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Create annotated release tag "' + release.tag +
+      '" on current HEAD? This writes a local Git tag.',
+    { modal: true },
+    'Create Tag'
+  );
+  if (confirm !== 'Create Tag') return false;
+
+  const root = getWorkspaceRoot(extensionUri);
+  if (
+    runGitLocal(
+      root,
+      ['tag', '-a', release.tag, '-m', 'Release ' + release.tag],
+      'Release tag created.'
+    ) === null
+  ) {
+    return false;
+  }
+
+  const push = await vscode.window.showWarningMessage(
+    'Push release tag "' + release.tag + '" to origin?',
+    { modal: true },
+    'Push Tag',
+    'Keep Local'
+  );
+
+  if (push === 'Push Tag') {
+    return runGitLocal(
+      root,
+      ['push', 'origin', release.tag],
+      'Release tag pushed to origin.'
+    ) !== null;
+  }
+
+  return true;
+}
+
+async function createReleaseCenterDraft(context, extensionUri) {
+  const gitState = await getGitState(extensionUri);
+  const quality = getQualityGateState(context, extensionUri);
+  const orchestrator = getTaskOrchestratorState(context);
+  const ci = await getCiIntelligenceState(
+    gitState,
+    quality,
+    orchestrator,
+    false
+  );
+  const doctor = getProjectDoctorReport(context, extensionUri, false);
+  const release = getReleaseCenterState(
+    context,
+    extensionUri,
+    ci,
+    doctor
+  );
+
+  if (release.verdict !== 'TAGGED') {
+    vscode.window.showWarningMessage(
+      'Create the current version tag on HEAD before creating a draft release.'
+    );
+    return false;
+  }
+
+  const root = getWorkspaceRoot(extensionUri);
+  const parsedRemote = parseGitHubRemote(
+    runGit(root, ['remote', 'get-url', 'origin'])
+  );
+  if (!parsedRemote) {
+    vscode.window.showWarningMessage(
+      'Current workspace is not linked to a GitHub repository.'
+    );
+    return false;
+  }
+
+  const session = await getGitHubSession(true);
+  if (!session) return false;
+
+  const confirm = await vscode.window.showWarningMessage(
+    'Create draft GitHub release "' + release.tag +
+      '" using the current changelog notes? If the tag is not yet on GitHub, GitHub may create it at the verified current commit.',
+    { modal: true },
+    'Create Draft Release'
+  );
+  if (confirm !== 'Create Draft Release') return false;
+
+  try {
+    const created = await githubApiRequest(
+      '/repos/' + encodeURIComponent(parsedRemote.owner) + '/' +
+        encodeURIComponent(parsedRemote.repo) + '/releases',
+      session.accessToken,
+      'POST',
+      {
+        tag_name: release.tag,
+        target_commitish: release.headSha,
+        name: release.tag,
+        body: release.notes,
+        draft: true,
+        prerelease: /-/.test(release.version),
+        generate_release_notes: false
+      }
+    );
+
+    vscode.window.showInformationMessage(
+      'Draft GitHub release created for ' + release.tag + '.'
+    );
+    if (created?.html_url) {
+      await vscode.env.openExternal(
+        vscode.Uri.parse(created.html_url)
+      );
+    }
+    return true;
+  } catch (error) {
+    vscode.window.showErrorMessage(
+      error?.message || 'Unable to create draft GitHub release.'
+    );
+    return false;
+  }
+}
+
+async function openReleaseCenterReleases(extensionUri) {
+  const root = getWorkspaceRoot(extensionUri);
+  const parsed = parseGitHubRemote(
+    root ? runGit(root, ['remote', 'get-url', 'origin']) : ''
+  );
+  if (!parsed) {
+    vscode.window.showWarningMessage(
+      'Current workspace is not linked to GitHub.'
+    );
+    return false;
+  }
+
+  await vscode.env.openExternal(
+    vscode.Uri.parse(parsed.webUrl + '/releases')
+  );
+  return true;
+}
+
+function renderReleaseCenterNotes(notes) {
+  if (!notes) {
+    return '<p class="muted">Add a CHANGELOG.md section for the current package version.</p>';
+  }
+
+  return '<div class="orchestrator-output">' +
+    escapeHtml(notes) + '</div>';
+}
+
+
 async function getWorkspaceState(extensionUri, version = 'dev', context) {
   const [git, project, health, recentFiles, devServer, github] = await Promise.all([
     getGitState(extensionUri),
@@ -6861,6 +7217,12 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     taskOrchestrator,
     false
   );
+  const releaseCenter = getReleaseCenterState(
+    context,
+    extensionUri,
+    ciIntelligence,
+    projectDoctor
+  );
 
   let workspaceName = 'No workspace open';
   if (vscode.workspace.workspaceFolders?.[0]?.name) {
@@ -6886,6 +7248,7 @@ async function getWorkspaceState(extensionUri, version = 'dev', context) {
     architecture,
     knowledgeGraph,
     projectDoctor,
+    releaseCenter,
     taskOrchestrator,
     ciIntelligence,
     agent: getGalaxyAgentState(),
@@ -7140,7 +7503,7 @@ function getDashboardHtml(state) {
   .ready-push-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
   .ready-push-actions{display:flex;gap:8px;flex-wrap:wrap}
   .ready-verdict{font-size:24px;font-weight:900;letter-spacing:.08em}
-  .ready-verdict.ready{color:#64ffb4}.ready-verdict.review{color:#ffcc66}.ready-verdict.blocked{color:#ff6b8a}
+  .ready-verdict.ready{color:#64ffb4}.ready-verdict.tagged{color:var(--cyan)}.ready-verdict.review{color:#ffcc66}.ready-verdict.blocked{color:#ff6b8a}
   .ci-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
   .ci-stat{padding:12px;border:1px solid rgba(0,247,255,.12);border-radius:12px;background:rgba(0,247,255,.018)}
   .ci-stat span{display:block;color:var(--muted);font-size:9px;letter-spacing:.11em;margin-bottom:6px}
@@ -7776,6 +8139,56 @@ function getDashboardHtml(state) {
       </div>
 
       <p class="muted" style="margin:12px 0 0">Doctor is local-only and never reads secret contents. Dependency audit remains an explicit network-aware action through Scan Dependencies.</p>
+    </article>
+
+    <article class="card wide"${widgetAttr(state, 'releaseCenter')}>
+      <div class="ready-push-head">
+        <div>
+          <div class="label">RELEASE CENTER</div>
+          <div class="ready-verdict ${String(state.releaseCenter.verdict || 'REVIEW').toLowerCase()}">${escapeHtml(state.releaseCenter.verdict || 'REVIEW')}</div>
+          <div class="muted">Version · changelog · Git state · Quality Gate · CI · Project Doctor · release tag</div>
+        </div>
+        <div class="ready-push-actions">
+          <button data-command="releaseRunCheck"><span>✓</span>Run Release Check</button>
+          <button data-command="releaseCopyNotes"><span>⧉</span>Copy Notes</button>
+          <button data-command="releaseCreateTag"><span>◇</span>Create Version Tag</button>
+          <button data-command="releaseCreateDraft"><span>⇧</span>Draft GitHub Release</button>
+          <button data-command="releaseOpenReleases"><span>↗</span>Open Releases</button>
+        </div>
+      </div>
+
+      <div class="ci-summary">
+        <div class="ci-stat"><span>VERSION</span><strong>${escapeHtml(state.releaseCenter.version || '—')}</strong></div>
+        <div class="ci-stat"><span>TAG</span><strong>${escapeHtml(state.releaseCenter.tag || '—')}</strong></div>
+        <div class="ci-stat"><span>BLOCK</span><strong>${Number(state.releaseCenter.counts?.block || 0)}</strong></div>
+        <div class="ci-stat"><span>REVIEW</span><strong>${Number(state.releaseCenter.counts?.review || 0)}</strong></div>
+        <div class="ci-stat"><span>PASS</span><strong>${Number(state.releaseCenter.counts?.pass || 0)}</strong></div>
+        <div class="ci-stat"><span>TAG STATE</span><strong>${state.releaseCenter.tagHeadMatches ? 'ON HEAD' : (state.releaseCenter.tagExists ? 'STALE' : 'AVAILABLE')}</strong></div>
+      </div>
+
+      <div class="ci-grid">
+        <div class="ci-panel">
+          <div class="project-group-title">RELEASE CHECKLIST</div>
+          ${renderReadyChecks(state.releaseCenter.checks)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">CHANGELOG RELEASE NOTES</div>
+          ${renderReleaseCenterNotes(state.releaseCenter.notes)}
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">NEXT VERSION IDEAS</div>
+          <div class="commit-line">Patch: <strong>${escapeHtml(state.releaseCenter.nextPatch || '—')}</strong></div>
+          <div class="commit-line">Minor: <strong>${escapeHtml(state.releaseCenter.nextMinor || '—')}</strong></div>
+          <div class="commit-line">Major: <strong>${escapeHtml(state.releaseCenter.nextMajor || '—')}</strong></div>
+        </div>
+
+        <div class="ci-panel">
+          <div class="project-group-title">RELEASE SAFETY</div>
+          <p class="muted">Release Center never changes the version automatically. Tag creation and GitHub draft release creation both require explicit modal confirmation.</p>
+        </div>
+      </div>
     </article>
 
     <article class="card wide"${widgetAttr(state, 'orchestrator')}>
@@ -8956,6 +9369,16 @@ async function runAction(command, value, context) {
       return refreshDeveloperKnowledgeGraph();
     case 'projectDoctorRun':
       return runProjectDoctor(context, context?.extensionUri);
+    case 'releaseRunCheck':
+      return runReleaseCenterCheck(context, context?.extensionUri);
+    case 'releaseCopyNotes':
+      return copyReleaseCenterNotes(context, context?.extensionUri);
+    case 'releaseCreateTag':
+      return createReleaseCenterTag(context, context?.extensionUri);
+    case 'releaseCreateDraft':
+      return createReleaseCenterDraft(context, context?.extensionUri);
+    case 'releaseOpenReleases':
+      return openReleaseCenterReleases(context?.extensionUri);
     case 'openArchitectureFile':
       return openArchitectureFile(value);
     case 'cpStartContest':
@@ -9287,6 +9710,11 @@ async function openDashboard(context) {
         message.command === 'knowledgeImpact' ||
         message.command === 'knowledgeRefresh' ||
         message.command === 'projectDoctorRun' ||
+        message.command === 'releaseRunCheck' ||
+        message.command === 'releaseCopyNotes' ||
+        message.command === 'releaseCreateTag' ||
+        message.command === 'releaseCreateDraft' ||
+        message.command === 'releaseOpenReleases' ||
         message.command === 'runTerminal' ||
         message.command === 'runVsCodeCommand' ||
         message.command === 'cpStartContest' ||
